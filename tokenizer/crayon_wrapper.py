@@ -17,6 +17,17 @@ from typing import List, Union, Optional, Dict, Any, Iterator, Tuple
 from pathlib import Path
 import queue
 
+# Fix Windows console UTF-8 printing issues for external packages (e.g., Crayon print statements with emoji)
+import sys
+import io
+if sys.platform.startswith("win"):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except AttributeError:
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 import torch
 import numpy as np
 

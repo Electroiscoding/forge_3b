@@ -200,6 +200,7 @@ class FusedDGN(torch.autograd.Function):
         weight, bias: (d_model,)
         """
         orig_shape = x.shape
+        ctx.orig_shape = orig_shape
         x_2d = x.reshape(-1, x.shape[-1]).contiguous()
         N, D = x_2d.shape
         G = n_groups
@@ -211,6 +212,7 @@ class FusedDGN(torch.autograd.Function):
             ctx.save_for_backward(x_2d, weight, bias, 
                                   _compute_rstd_pytorch(x_2d, G, Dg, eps))
             ctx.n_groups = G
+            ctx.Dg = Dg
             ctx.eps = eps
             return out.reshape(orig_shape)
         
@@ -246,7 +248,7 @@ class FusedDGN(torch.autograd.Function):
             y = _dgn_pytorch(x_r, w_r, b_r, G, Dg, eps)
             y.backward(grad_output.reshape_as(y))
         
-        return x_r.grad, w_r.grad, b_r.grad, None, None
+        return x_r.grad.reshape(ctx.orig_shape), w_r.grad, b_r.grad, None, None
 
 
 def _dgn_pytorch(x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor,

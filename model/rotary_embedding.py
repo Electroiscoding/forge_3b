@@ -140,10 +140,16 @@ class RotaryEmbedding(nn.Module):
             # Custom positions (for packed sequences or position bias)
             cos = cos[position_ids]   # (B, T, head_dim) or (T, head_dim)
             sin = sin[position_ids]
-        
-        # Reshape for broadcasting: (1, 1, T, head_dim)
-        cos = cos.unsqueeze(0).unsqueeze(0)
-        sin = sin.unsqueeze(0).unsqueeze(0)
+            if position_ids.dim() == 2:
+                cos = cos.unsqueeze(1)  # (B, 1, T, head_dim)
+                sin = sin.unsqueeze(1)
+            else:
+                cos = cos.unsqueeze(0).unsqueeze(0)  # (1, 1, T, head_dim)
+                sin = sin.unsqueeze(0).unsqueeze(0)
+        else:
+            # Reshape for broadcasting: (1, 1, T, head_dim)
+            cos = cos.unsqueeze(0).unsqueeze(0)
+            sin = sin.unsqueeze(0).unsqueeze(0)
         
         q_out = _rotate_half_apply(q.float(), cos, sin).to(q.dtype)
         k_out = _rotate_half_apply(k.float(), cos, sin).to(k.dtype)
