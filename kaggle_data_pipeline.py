@@ -49,7 +49,9 @@ HF_TOKEN     = os.environ.get("HF_TOKEN")
 # Fallback: Check if running inside Kaggle and load token from Kaggle UserSecrets
 if not HF_TOKEN:
     try:
-        from kaggle_secrets import UserSecretsClient
+        # Use dynamic import to prevent static linters from failing in non-Kaggle environments
+        kaggle_secrets = __import__("kaggle_secrets")
+        UserSecretsClient = kaggle_secrets.UserSecretsClient
         HF_TOKEN = UserSecretsClient().get_secret("HF_TOKEN")
     except Exception:
         pass
