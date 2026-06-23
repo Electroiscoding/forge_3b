@@ -512,12 +512,28 @@ def process_domain(
     domain_dir = out_base / domain
     domain_dir.mkdir(parents=True, exist_ok=True)
 
-    # Resumable: skip if already done
+    # Resumable: skip if already done (locally or on HF Hub)
     meta_path = domain_dir / "packing_meta.json"
     if meta_path.exists():
-        logger.info(f"[{domain}] Already processed — skipping (delete {meta_path} to rerun)")
+        logger.info(f"[{domain}] Already processed locally — skipping (delete {meta_path} to rerun)")
         with open(str(meta_path)) as f:
             return json.load(f)
+
+    if hf_api is not None:
+        try:
+            from huggingface_hub import hf_hub_download
+            downloaded = hf_hub_download(
+                repo_id=HF_REPO_ID,
+                filename=f"{domain}/packing_meta.json",
+                repo_type="dataset",
+                token=HF_TOKEN,
+            )
+            shutil.copy(downloaded, str(meta_path))
+            logger.info(f"[{domain}] Already processed on HuggingFace Hub — skipping (downloaded metadata)")
+            with open(str(meta_path)) as f:
+                return json.load(f)
+        except Exception:
+            pass
 
     t0 = time.perf_counter()
 
