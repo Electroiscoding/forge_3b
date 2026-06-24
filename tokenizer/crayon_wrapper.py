@@ -43,15 +43,17 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 
 _thread_local = threading.local()
+_init_lock = threading.Lock()
 
 def _get_thread_local_tokenizer(profile: str = "standard") -> CrayonVocab:
     """Return a thread-local CrayonVocab instance, creating one if needed."""
     if not hasattr(_thread_local, "tokenizer"):
-        # CPU is 20× faster than CUDA for CRAYON (23.84M vs 1.22M tok/s)
-        _thread_local.tokenizer = CrayonVocab(device="cpu")
-        _thread_local.tokenizer.load_profile(profile)
-        logger.debug(f"Thread {threading.current_thread().name}: "
-                     f"CrayonVocab loaded with profile='{profile}'")
+        with _init_lock:
+            # CPU is 20× faster than CUDA for CRAYON (23.84M vs 1.22M tok/s)
+            _thread_local.tokenizer = CrayonVocab(device="cpu")
+            _thread_local.tokenizer.load_profile(profile)
+            logger.debug(f"Thread {threading.current_thread().name}: "
+                         f"CrayonVocab loaded with profile='{profile}'")
     return _thread_local.tokenizer
 
 
