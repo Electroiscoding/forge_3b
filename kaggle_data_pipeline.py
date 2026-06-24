@@ -32,6 +32,8 @@ import traceback
 from pathlib import Path
 from typing import Iterator, Optional, List, Dict, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import gzip
+import pyarrow.parquet as pq
 
 import numpy as np
 from datasets import Dataset
@@ -490,12 +492,36 @@ def download_and_extract_texts(domain: str, cfg: dict, target_docs: int) -> Iter
             
         local_path = Path(local_path)
         
-        # Read file using datasets.Dataset
+        # Read file natively using pyarrow or gzip/json
         try:
             if filename.endswith(".parquet"):
-                ds = Dataset.from_parquet(str(local_path))
+                pf = pq.ParquetFile(str(local_path))
+                # Read batch-by-batch using pyarrow RecordBatch iterator
+                for batch in pf.iter_batches(batch_size=10000, columns=[text_key]):
+                    col_name = text_key if text_key in batch.schema.names else batch.schema.names[0]
+                    texts = batch.column(col_name).to_pylist()
+                    for text in texts:
+                        if isinstance(text, str) and text.strip():
+                            yield text.strip()
+                            doc_count += 1
+                            if doc_count >= target_docs:
+                                break
+                    if doc_count >= target_docs:
+                        break
             elif filename.endswith((".json", ".jsonl", ".json.gz", ".jsonl.gz")):
-                ds = Dataset.from_json(str(local_path))
+                open_fn = gzip.open if filename.endswith(".gz") else open
+                mode = "rt" if filename.endswith(".gz") else "r"
+                with open_fn(str(local_path), mode, encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        if not line.strip():
+                            continue
+                        row = json.loads(line)
+                        text = _extract_text(row, text_key, domain)
+                        if text:
+                            yield text
+                            doc_count += 1
+                            if doc_count >= target_docs:
+                                break
             else:
                 logger.warning(f"  [{domain}] Unsupported file format: {filename}. Skipping.")
                 local_path.unlink()
@@ -506,23 +532,15 @@ def download_and_extract_texts(domain: str, cfg: dict, target_docs: int) -> Iter
                 local_path.unlink()
             continue
             
-        # Yield texts
-        file_docs = 0
-        for row in ds:
-            text = _extract_text(row, text_key, domain)
-            if text:
-                yield text
-                doc_count += 1
-                file_docs += 1
-                if doc_count >= target_docs:
-                    break
-                    
         # Delete local file immediately
         try:
             local_path.unlink()
-            logger.info(f"  [{domain}] Deleted raw downloaded file: {filename} (processed {file_docs:,} docs)")
+            logger.info(f"  [{domain}] Deleted raw downloaded file: {filename}")
         except Exception as e:
             logger.warning(f"  [{domain}] Failed to delete raw file {local_path}: {e}")
+            
+        # Force garbage collection to keep RAM flatlined
+        gc.collect()
             
         if doc_count >= target_docs:
             logger.info(f"  [{domain}] Reached target of {target_docs:,} documents. Stopping.")
@@ -644,10 +662,15 @@ def process_domain(
             pad=False,
             return_tensors=None,
         )
+        # Clear the batch to immediately free memory
+        batch.clear()
+        
         for token_ids in batch_res["input_ids"]:
             if token_ids:
                 packer.add_tokens(token_ids)
                 n_tokenized += 1
+        
+        del batch_res
 
     # ── Process text stream ──────────────────────────────────────────────────
     try:
