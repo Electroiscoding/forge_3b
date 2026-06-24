@@ -1,9 +1,9 @@
 """
-FORGE-3B Kaggle Data Pipeline — Final Production Version.
+FORGE-3B Kaggle Data Pipeline — High-Performance Production Version.
 
-Streams all 10 pretraining domains from HuggingFace, quality-filters, tokenizes
-with CRAYON, packs into fixed-length .npy shards, uploads to HuggingFace Hub,
-and verifies ≥50B total tokens.
+Streams all 10 pretraining domains from HuggingFace via sequential parquet/jsonl downloads,
+processes with zero-IPC main-thread batch tokenization using CRAYON, packs into
+fixed-length .npy shards, uploads to HuggingFace Hub, and verifies ≥50B total tokens.
 
 Target: Kaggle free tier (no GPU, 4 CPU, ~30 GB RAM, ~70 GB disk). Runtime ≤ 10h.
 
@@ -29,12 +29,13 @@ import hashlib
 import logging
 import argparse
 import traceback
-import multiprocessing as mp
 from pathlib import Path
 from typing import Iterator, Optional, List, Dict, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
+from datasets import Dataset
+from huggingface_hub import HfApi, hf_hub_download, login
 
 logger = logging.getLogger("forge_pipeline")
 
@@ -96,7 +97,7 @@ DATASET_REGISTRY: Dict[str, Dict[str, Any]] = {
         "hf_config":      "20231101.en",
         "split":          "train",
         "text_key":       "text",
-        "quality_filter": True,
+        "quality_filter": False,        # Curated: completely bypass quality check
         "target_docs":    7_000_000,    # 8% = 4B tokens, wiki articles are short
         "target_tokens":  4_000_000_000,
         "weight_pct":     8,
@@ -216,6 +217,35 @@ class DedupFilter:
         self._seen.add(h)
         return False
 
+    def seen_count(self) -> int:
+        return len(self._seen)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Background Upload Helper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def upload_single_shard(api, domain: str, path: Path, delete_after_upload: bool = True) -> bool:
+    """Uploads a single shard file to Hugging Face Hub and deletes it locally on success."""
+    t0 = time.perf_counter()
+    try:
+        logger.info(f"    [Background Upload] Starting: {domain}/{path.name}")
+        api.upload_file(
+            path_or_fileobj=str(path),
+            path_in_repo=f"{domain}/{path.name}",
+            repo_id=HF_REPO_ID,
+            repo_type="dataset",
+        )
+        elapsed = time.perf_counter() - t0
+        logger.info(f"    [Background Upload] ✓ Uploaded: {domain}/{path.name} in {elapsed:.1f}s")
+        if delete_after_upload:
+            path.unlink()
+            logger.info(f"    [Background Upload] Deleted local: {path.name}")
+        return True
+    except Exception as exc:
+        logger.error(f"    [Background Upload] ✗ Failed: {domain}/{path.name}: {exc}")
+        return False
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Inline Packer + Shard Writer
@@ -228,18 +258,21 @@ class InlinePacker:
     """
 
     def __init__(self, output_dir: Path, seq_len: int = 2048,
-                 shard_size: int = 50_000, split: str = "train"):
+                 shard_size: int = 50_000, split: str = "train",
+                 on_shard_written=None):
         self.output_dir = output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.seq_len    = seq_len
         self.shard_size = shard_size
         self.split      = split
+        self.on_shard_written = on_shard_written
         self._buffer: List[int] = []
         self._shard_seqs: List[np.ndarray] = []
         self._shard_idx  = 0
         self._n_seqs     = 0
         self._n_tokens   = 0
         self._n_docs     = 0
+        self._flushed_paths: List[Path] = []
 
     def add_tokens(self, token_ids: List[int]):
         """Add BOS + tokens + EOS, drain into sequences."""
@@ -270,6 +303,13 @@ class InlinePacker:
                     f"({arr.nbytes / 1e6:.1f} MB) → {path.name}")
         self._shard_idx += 1
         self._shard_seqs = []
+        self._flushed_paths.append(path)
+
+        # If we have more than one flushed shard, the second-to-last one is safe to upload and delete!
+        if len(self._flushed_paths) > 1:
+            safe_path = self._flushed_paths[-2]
+            if self.on_shard_written:
+                self.on_shard_written(safe_path, delete_after_upload=True)
 
     def finalize(self) -> dict:
         self._drain()
@@ -305,12 +345,11 @@ def write_val_split(domain_dir: Path, val_fraction: float = 0.005):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HuggingFace Upload
+# HuggingFace Repo Initialization
 # ─────────────────────────────────────────────────────────────────────────────
 
 def ensure_hf_repo():
     """Create the HF dataset repo if it doesn't exist."""
-    from huggingface_hub import HfApi, login
     if not HF_TOKEN:
         raise ValueError(
             "HuggingFace token is empty or not set. Please provide it via the HF_TOKEN environment "
@@ -327,73 +366,167 @@ def ensure_hf_repo():
     return api
 
 
-def upload_domain_to_hf(api, domain: str, domain_dir: Path):
-    """Upload a single domain's .npy shards + metadata to HF."""
-    logger.info(f"[{domain}] Uploading to HF: {HF_REPO_ID}/{domain}/...")
-    t0 = time.perf_counter()
+# ─────────────────────────────────────────────────────────────────────────────
+# Sequential Local Parquet/JSONL Downloader
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_dataset_files(repo_id: str, cfg: dict) -> List[str]:
+    """List and filter data files from HF dataset repository."""
+    from huggingface_hub import list_repo_files
     try:
-        api.upload_folder(
-            folder_path=str(domain_dir),
-            path_in_repo=domain,
-            repo_id=HF_REPO_ID,
-            repo_type="dataset",
-            commit_message=f"Add {domain} tokenized shards",
-        )
-        elapsed = time.perf_counter() - t0
-        logger.info(f"[{domain}] ✓ Uploaded to HF in {elapsed:.0f}s")
-        return True
-    except Exception as exc:
-        logger.error(f"[{domain}] HF upload failed: {exc}")
-        traceback.print_exc()
-        return False
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# HuggingFace Dataset Streaming
-# ─────────────────────────────────────────────────────────────────────────────
-
-def stream_hf_dataset(domain: str, cfg: dict) -> Iterator[str]:
-    """Stream text documents from HF up to target_docs."""
-    from datasets import load_dataset
-
-    text_key    = cfg["text_key"]
-    target_docs = cfg["target_docs"]
-    hf_id       = cfg["hf_id"]
-    hf_config   = cfg.get("hf_config")
+        all_files = list_repo_files(repo_id, repo_type="dataset")
+    except Exception as e:
+        logger.error(f"Failed to list files for {repo_id}: {e}")
+        return []
+    
+    hf_config = cfg.get("hf_config")
     hf_data_dir = cfg.get("hf_data_dir")
-    split       = cfg.get("split", "train")
+    langs = cfg.get("langs")
+    
+    filtered = []
+    # Identify valid data file extensions
+    valid_exts = (".parquet", ".json.gz", ".jsonl.gz", ".jsonl", ".json", ".txt")
+    
+    for f in all_files:
+        # Skip metadata/documentation files
+        if f.endswith((".md", ".json", ".txt")) and any(x in f.upper() for x in ("README", "META", "DATASET_INFO", "STATE", "MANIFEST")):
+            continue
+        if not f.endswith(valid_exts):
+            continue
+            
+        # Filter by configuration name
+        if hf_config:
+            # Some repos nest by config name, e.g. CC-MAIN-2024-10/ or data/CC-MAIN-2024-10/
+            if not (f.startswith(f"{hf_config}/") or f.startswith(f"data/{hf_config}/")):
+                continue
+                
+        # Filter by data directory
+        if hf_data_dir:
+            if not f.startswith(f"{hf_data_dir}/"):
+                continue
+                
+        # Filter by language for multilingual C4
+        if langs:
+            matched_lang = False
+            for lang in langs:
+                if f"c4-{lang}." in f or f"/{lang}/" in f or f.startswith(f"{lang}/") or f"-{lang}-" in f:
+                    matched_lang = True
+                    break
+            if not matched_lang:
+                continue
+                
+        filtered.append(f)
+        
+    filtered.sort()
+    return filtered
 
-    if domain == "multilingual":
-        yield from _stream_multilingual(cfg)
+
+def get_domain_files_with_fallback(domain: str, cfg: dict) -> Tuple[str, dict, List[str]]:
+    """Tries to list files for primary dataset source, falling back if necessary."""
+    hf_id = cfg["hf_id"]
+    files = get_dataset_files(hf_id, cfg)
+    if files:
+        return hf_id, cfg, files
+        
+    # Fallbacks when primary source fails
+    fallbacks = {
+        "dolma": [
+            {"hf_id": "allenai/dolma", "hf_config": "v1_6-sample"},
+        ],
+        "thestack": [
+            {"hf_id": "bigcode/the-stack-v2-train-smol-ids"},
+        ],
+        "redpajama_cc": [
+            {"hf_id": "togethercomputer/RedPajama-Data-1T-Sample"},
+        ],
+        "fineweb_edu": [
+            {"hf_id": "HuggingFaceFW/fineweb-edu-score-2", "hf_config": "CC-MAIN-2024-10"},
+        ],
+        "openwebmath": [
+            {"hf_id": "open-web-math/open-web-math"},
+        ],
+    }
+    
+    if domain in fallbacks:
+        for fb in fallbacks[domain]:
+            logger.warning(f"  [{domain}] Primary source empty. Trying fallback: {fb['hf_id']}")
+            fb_cfg = cfg.copy()
+            fb_cfg.update(fb)
+            files = get_dataset_files(fb["hf_id"], fb_cfg)
+            if files:
+                return fb["hf_id"], fb_cfg, files
+                
+    logger.error(f"  [{domain}] All file listing attempts failed.")
+    return hf_id, cfg, []
+
+
+def download_and_extract_texts(domain: str, cfg: dict, target_docs: int) -> Iterator[str]:
+    """Downloads files one by one, yields texts, and deletes them immediately."""
+    hf_id, final_cfg, files = get_domain_files_with_fallback(domain, cfg)
+    if not files:
+        logger.error(f"  [{domain}] No files to process. Skipping domain.")
         return
-
-    kwargs = {"streaming": True, "split": split}
-    if hf_config:
-        kwargs["name"] = hf_config
-    if hf_data_dir:
-        kwargs["data_dir"] = hf_data_dir
-
-    logger.info(f"  [{domain}] Streaming: {hf_id} (config={hf_config}, "
-                f"data_dir={hf_data_dir}, target={target_docs:,})")
-
-    try:
-        ds = load_dataset(hf_id, **kwargs)
-    except Exception as exc:
-        logger.error(f"  [{domain}] Primary source failed: {exc}")
-        ds = _try_fallback(domain, cfg, exc)
-        if ds is None:
-            return
-
-    count = 0
-    for example in ds:
-        text = _extract_text(example, text_key, domain)
-        if text:
-            yield text
-            count += 1
-            if count >= target_docs:
-                break
-            if count % 500_000 == 0:
-                logger.info(f"  [{domain}] Streamed {count:,}/{target_docs:,} docs")
+        
+    text_key = final_cfg["text_key"]
+    doc_count = 0
+    
+    logger.info(f"  [{domain}] Found {len(files)} data files in {hf_id} to process.")
+    
+    for i, filename in enumerate(files, 1):
+        logger.info(f"  [{domain}] Downloading file {i}/{len(files)}: {filename}")
+        t_dl = time.perf_counter()
+        try:
+            local_path = hf_hub_download(
+                repo_id=hf_id,
+                filename=filename,
+                repo_type="dataset",
+                token=HF_TOKEN,
+            )
+            dl_time = time.perf_counter() - t_dl
+            logger.info(f"  [{domain}] ✓ Downloaded in {dl_time:.1f}s. Reading...")
+        except Exception as e:
+            logger.error(f"  [{domain}] ✗ Download failed for {filename}: {e}")
+            continue
+            
+        local_path = Path(local_path)
+        
+        # Read file using datasets.Dataset
+        try:
+            if filename.endswith(".parquet"):
+                ds = Dataset.from_parquet(str(local_path))
+            elif filename.endswith((".json", ".jsonl", ".json.gz", ".jsonl.gz")):
+                ds = Dataset.from_json(str(local_path))
+            else:
+                logger.warning(f"  [{domain}] Unsupported file format: {filename}. Skipping.")
+                local_path.unlink()
+                continue
+        except Exception as e:
+            logger.error(f"  [{domain}] Failed to read file {filename}: {e}")
+            if local_path.exists():
+                local_path.unlink()
+            continue
+            
+        # Yield texts
+        file_docs = 0
+        for row in ds:
+            text = _extract_text(row, text_key, domain)
+            if text:
+                yield text
+                doc_count += 1
+                file_docs += 1
+                if doc_count >= target_docs:
+                    break
+                    
+        # Delete local file immediately
+        try:
+            local_path.unlink()
+            logger.info(f"  [{domain}] Deleted raw downloaded file: {filename} (processed {file_docs:,} docs)")
+        except Exception as e:
+            logger.warning(f"  [{domain}] Failed to delete raw file {local_path}: {e}")
+            
+        if doc_count >= target_docs:
+            logger.info(f"  [{domain}] Reached target of {target_docs:,} documents. Stopping.")
+            break
 
 
 def _extract_text(example: dict, text_key: str, domain: str) -> Optional[str]:
@@ -407,74 +540,6 @@ def _extract_text(example: dict, text_key: str, domain: str) -> Optional[str]:
     text = example.get(text_key, "")
     if isinstance(text, str) and text.strip():
         return text.strip()
-    return None
-
-
-def _stream_multilingual(cfg: dict) -> Iterator[str]:
-    """Interleave mC4 languages."""
-    from datasets import load_dataset
-    langs       = cfg.get("langs", ["de", "fr", "es", "zh", "ja"])
-    target_docs = cfg["target_docs"]
-    per_lang    = target_docs // len(langs)
-    text_key    = cfg["text_key"]
-    total = 0
-    for lang in langs:
-        logger.info(f"  [multilingual] Loading mC4 lang={lang}, target={per_lang:,}")
-        try:
-            ds = load_dataset("allenai/c4", lang, streaming=True, split="train")
-        except Exception as exc:
-            logger.warning(f"  [multilingual] Failed lang={lang}: {exc}")
-            continue
-        lang_count = 0
-        for example in ds:
-            text = example.get(text_key, "")
-            if isinstance(text, str) and text.strip():
-                yield text.strip()
-                lang_count += 1
-                total += 1
-                if lang_count >= per_lang:
-                    break
-                if total >= target_docs:
-                    return
-        logger.info(f"  [multilingual] lang={lang}: {lang_count:,} docs")
-
-
-def _try_fallback(domain: str, cfg: dict, original_exc: Exception):
-    """Fallback dataset sources when primary fails."""
-    from datasets import load_dataset
-    fallbacks = {
-        "dolma": [
-            {"hf_id": "allenai/dolma", "name": "v1_6-sample",
-             "streaming": True, "split": "train"},
-        ],
-        "thestack": [
-            {"hf_id": "bigcode/the-stack-v2-train-smol-ids",
-             "streaming": True, "split": "train"},
-        ],
-        "redpajama_cc": [
-            {"hf_id": "togethercomputer/RedPajama-Data-1T-Sample",
-             "streaming": True, "split": "train"},
-        ],
-        "fineweb_edu": [
-            {"hf_id": "HuggingFaceFW/fineweb-edu-score-2",
-             "name": "CC-MAIN-2024-10", "streaming": True, "split": "train"},
-        ],
-        "openwebmath": [
-            {"hf_id": "open-web-math/open-web-math",
-             "streaming": True, "split": "train"},
-        ],
-    }
-    if domain not in fallbacks:
-        logger.error(f"  [{domain}] No fallback. Skipping.")
-        return None
-    for fb in fallbacks[domain]:
-        hf_id = fb.pop("hf_id")
-        logger.warning(f"  [{domain}] Trying fallback: {hf_id}")
-        try:
-            return load_dataset(hf_id, **fb)
-        except Exception as exc2:
-            logger.warning(f"  [{domain}] Fallback {hf_id} failed: {exc2}")
-    logger.error(f"  [{domain}] All fallbacks failed. Skipping.")
     return None
 
 
@@ -493,7 +558,7 @@ def process_domain(
 ) -> dict:
     """
     Full pipeline for one domain:
-      stream HF → quality filter → dedup → tokenize → pack → shard → upload HF
+      download files sequentially -> read -> quality filter & dedup (if messy) -> batch tokenize in C++ -> pack -> upload HF
     """
     domain_dir = out_base / domain
     domain_dir.mkdir(parents=True, exist_ok=True)
@@ -507,8 +572,8 @@ def process_domain(
 
     if hf_api is not None:
         try:
-            from huggingface_hub import hf_hub_download
-            downloaded = hf_hub_download(
+            from huggingface_hub import hf_hub_download as hf_download
+            downloaded = hf_download(
                 repo_id=HF_REPO_ID,
                 filename=f"{domain}/packing_meta.json",
                 repo_type="dataset",
@@ -523,76 +588,127 @@ def process_domain(
 
     t0 = time.perf_counter()
 
-    # ── Initialize tokenizer ─────────────────────────────────────────────────
-    try:
-        from tokenizer.crayon_wrapper import ForgeTokenizer
-        tok = ForgeTokenizer(
-            profile=tokenizer_profile,
-            device="cpu",
-            n_workers=1,
-            max_length=seq_len * 4,
-            add_bos=False,
-            add_eos=False,
-        )
-        logger.info(f"[{domain}] CRAYON tokenizer loaded")
-    except ImportError:
-        logger.error(f"[{domain}] CRAYON not found! pip install xerv-crayon")
-        return {"domain": domain, "error": "CRAYON tokenizer not found"}
+    # ── Initialize background uploader thread pool ───────────────────────────
+    upload_executor = ThreadPoolExecutor(max_workers=2)
+    upload_futures = []
+
+    def on_shard_written(path: Path, delete_after_upload: bool = True):
+        if hf_api is not None:
+            future = upload_executor.submit(
+                upload_single_shard, hf_api, domain, path, delete_after_upload
+            )
+            upload_futures.append(future)
 
     # ── Initialize packer + filters ──────────────────────────────────────────
-    packer = InlinePacker(output_dir=domain_dir, seq_len=seq_len,
-                          shard_size=shard_size)
+    packer = InlinePacker(
+        output_dir=domain_dir,
+        seq_len=seq_len,
+        shard_size=shard_size,
+        on_shard_written=on_shard_written
+    )
     use_quality = cfg.get("quality_filter", True)
     dedup       = DedupFilter()
 
+    # Check if this domain is curated (wikipedia, books, arxiv, thestack)
+    is_curated = domain in ("wikipedia", "books", "arxiv", "thestack")
+    if is_curated:
+        logger.info(f"[{domain}] Curated domain detected. Skipping quality filtering and deduplication.")
+
     n_streamed = n_quality_fail = n_dup = n_tokenized = n_tok_fail = 0
+    target_docs = cfg["target_docs"]
 
-    # ── Stream + filter + tokenize + pack ────────────────────────────────────
-    logger.info(f"[{domain}] Starting (target={cfg['target_docs']:,} docs, "
-                f"{cfg['target_tokens']/1e9:.0f}B tokens, {cfg['weight_pct']}% of mix)...")
+    # Initialize the ForgeTokenizer on the main thread with 4 threads
+    from tokenizer.crayon_wrapper import ForgeTokenizer
+    logger.info(f"[{domain}] Initializing ForgeTokenizer on main thread (C++ multi-threaded)...")
+    tokenizer = ForgeTokenizer(
+        profile=tokenizer_profile,
+        device="cpu",
+        n_workers=4,
+        add_bos=False,
+        add_eos=False,
+    )
 
+    # Batch parameters
+    batch_size = 10000
+    texts_to_process = []
+
+    def flush_batch(batch):
+        nonlocal n_tokenized
+        if not batch:
+            return
+        # Tokenize the entire batch in parallel using C++ thread pool
+        batch_res = tokenizer.encode_batch(
+            batch,
+            add_bos=False,
+            add_eos=False,
+            pad=False,
+            return_tensors=None,
+        )
+        for token_ids in batch_res["input_ids"]:
+            if token_ids:
+                packer.add_tokens(token_ids)
+                n_tokenized += 1
+
+    # ── Process text stream ──────────────────────────────────────────────────
     try:
-        for text in stream_hf_dataset(domain, cfg):
+        for text in download_and_extract_texts(domain, cfg, target_docs):
             n_streamed += 1
-
-            if use_quality and not is_quality_document(text):
-                n_quality_fail += 1
-                continue
-            if dedup.is_duplicate(text):
-                n_dup += 1
-                continue
-
-            try:
-                token_ids = tok.encode(text, add_bos=False, add_eos=False,
-                                       truncate=False)
-                if not token_ids:
+            
+            # Apply quality filter and deduplication only if domain is not curated
+            if not is_curated:
+                if use_quality and not is_quality_document(text):
+                    n_quality_fail += 1
                     continue
-            except Exception:
-                n_tok_fail += 1
-                continue
-
-            packer.add_tokens(token_ids)
-            n_tokenized += 1
-
-            if n_tokenized % 200_000 == 0:
+                if dedup.is_duplicate(text):
+                    n_dup += 1
+                    continue
+                    
+            texts_to_process.append(text)
+            
+            if len(texts_to_process) >= batch_size:
+                flush_batch(texts_to_process)
+                texts_to_process = []
+                
                 elapsed = time.perf_counter() - t0
-                rate = n_tokenized / elapsed
-                est_remain = (cfg["target_docs"] - n_streamed) / max(rate, 1)
+                rate = n_tokenized / max(elapsed, 1)
                 tok_so_far = packer._n_seqs * seq_len
                 logger.info(
                     f"[{domain}] {n_tokenized:,} tokenized | "
-                    f"{tok_so_far/1e9:.2f}B tokens packed | "
+                    f"{tok_so_far/1e9:.3f}B tokens packed | "
                     f"{n_quality_fail:,} qf | {n_dup:,} dup | "
-                    f"{elapsed:.0f}s | ETA {est_remain:.0f}s"
+                    f"{elapsed:.0f}s | {rate*60:.0f} docs/min"
                 )
-
+                
+        # Flush remaining docs in buffer
+        if texts_to_process:
+            flush_batch(texts_to_process)
+            texts_to_process = []
+            
     except Exception as exc:
-        logger.error(f"[{domain}] Stream error after {n_streamed:,} docs: {exc}")
+        logger.error(f"[{domain}] Processing error: {exc}")
         traceback.print_exc()
 
     # ── Finalize ─────────────────────────────────────────────────────────────
     pack_meta = packer.finalize()
     n_val = write_val_split(domain_dir, val_fraction=0.005)
+
+    # Queue the final train shard (the last one kept on disk) and the validation shard for upload & deletion
+    if packer._flushed_paths:
+        last_train_path = packer._flushed_paths[-1]
+        if last_train_path.exists():
+            on_shard_written(last_train_path, delete_after_upload=True)
+
+    val_path = domain_dir / "val_shard_0000.npy"
+    if val_path.exists():
+        on_shard_written(val_path, delete_after_upload=True)
+
+    # Wait for all background uploads of this domain to complete
+    if upload_futures:
+        logger.info(f"[{domain}] Waiting for all background uploads ({len(upload_futures)} tasks) to complete...")
+        for fut in as_completed(upload_futures):
+            fut.result()
+
+    upload_executor.shutdown(wait=True)
 
     elapsed = time.perf_counter() - t0
     train_seqs = pack_meta["train_sequences"] - n_val
@@ -619,22 +735,25 @@ def process_domain(
 
     logger.info(
         f"[{domain}] ✓ DONE: {n_tokenized:,} docs → "
-        f"{train_seqs:,} train seqs ({meta['train_tokens']/1e9:.2f}B tokens) | "
+        f"{train_seqs:,} train seqs ({meta['train_tokens']/1e9:.3f}B tokens) | "
         f"{elapsed/60:.1f}min"
     )
 
-    # ── Upload to HuggingFace ────────────────────────────────────────────────
+    # Upload the final packing_meta.json to HuggingFace
     if hf_api is not None:
-        upload_domain_to_hf(hf_api, domain, domain_dir)
-
-        # Free disk space after upload (Kaggle has ~70GB limit)
-        # Keep only the metadata, remove heavy .npy files
-        for npy_file in domain_dir.glob("*.npy"):
-            npy_file.unlink()
-        logger.info(f"[{domain}] Freed disk space (shards uploaded to HF)")
+        try:
+            hf_api.upload_file(
+                path_or_fileobj=str(meta_path),
+                path_in_repo=f"{domain}/packing_meta.json",
+                repo_id=HF_REPO_ID,
+                repo_type="dataset",
+            )
+            logger.info(f"[{domain}] ✓ Uploaded packing_meta.json to HF Hub")
+        except Exception as exc:
+            logger.error(f"[{domain}] Failed to upload packing_meta.json: {exc}")
 
     # Free memory
-    del tok, packer, dedup
+    del packer, dedup, tokenizer
     gc.collect()
 
     return meta
@@ -654,6 +773,7 @@ def run_pipeline(
     upload: bool = True,
     hf_username: Optional[str] = None,
     hf_token: Optional[str] = None,
+    smoke_test: bool = False,
 ):
     """Run the full 10-domain pipeline, upload each domain to HF after processing."""
     global HF_USERNAME, HF_TOKEN, HF_REPO_ID
@@ -693,14 +813,18 @@ def run_pipeline(
     summaries = []
 
     # ── Process each domain sequentially ─────────────────────────────────────
-    # Sequential is more reliable on Kaggle (avoids memory pressure).
-    # Each domain is uploaded + disk-freed before starting the next.
     for i, domain in enumerate(target_domains, 1):
-        cfg = DATASET_REGISTRY[domain]
+        cfg = DATASET_REGISTRY[domain].copy()
+        current_shard_size = shard_size
+        if smoke_test:
+            cfg["target_docs"] = 5
+            cfg["target_tokens"] = 10_000
+            current_shard_size = 500
+
         logger.info(f"\n{'─'*60}")
         logger.info(f" [{i}/{len(target_domains)}] Domain: {domain.upper()}")
         logger.info(f" {cfg.get('weight_pct', '?')}% of mix | "
-                    f"Target: {cfg['target_tokens']/1e9:.0f}B tokens")
+                    f"Target: {cfg['target_tokens']/1e9:.3f}B tokens")
         logger.info(f"{'─'*60}")
 
         try:
@@ -709,7 +833,7 @@ def run_pipeline(
                 cfg=cfg,
                 out_base=out_path,
                 seq_len=seq_len,
-                shard_size=shard_size,
+                shard_size=current_shard_size,
                 tokenizer_profile=tokenizer_profile,
                 hf_api=hf_api,
             )
@@ -746,7 +870,7 @@ def run_pipeline(
     # ── Print summary table ──────────────────────────────────────────────────
     print(f"\n{'═'*85}")
     print(f"  FORGE-3B Data Pipeline — COMPLETE")
-    print(f"  Total time: {elapsed_global/3600:.1f} hours ({elapsed_global:.0f}s)")
+    print(f"  Total time: {elapsed_global/3600:.2f} hours ({elapsed_global:.0f}s)")
     print(f"  HF Repo: https://huggingface.co/datasets/{HF_REPO_ID}")
     print(f"{'═'*85}")
     print(f"{'Domain':<18} {'Train Seqs':>12} {'Val Seqs':>10} "
@@ -770,25 +894,25 @@ def run_pipeline(
                 f"{m.get('domain','?'):<18} "
                 f"{m.get('train_sequences',0):>12,} "
                 f"{m.get('val_sequences',0):>10,} "
-                f"{tt/1e9:>12.2f} "
-                f"{m.get('elapsed_s',0)/60:>12.1f} "
+                f"{tt/1e9:>12.4f} "
+                f"{m.get('elapsed_s',0)/60:>12.2f} "
                 f"     ✓"
             )
 
     total_all = total_train_tokens + total_val_tokens
     print(f"{'─'*85}")
     print(f"{'TOTAL':<18} {'':>12} {'':>10} "
-          f"{total_all/1e9:>12.2f} "
-          f"{elapsed_global/60:>12.1f}")
+          f"{total_all/1e9:>12.4f} "
+          f"{elapsed_global/60:>12.2f}")
     print(f"{'═'*85}")
 
     # ── Token budget verification ────────────────────────────────────────────
     if total_all >= TOTAL_TARGET_TOKENS:
-        print(f"\n✅ TOKEN BUDGET MET: {total_all/1e9:.2f}B ≥ {TOTAL_TARGET_TOKENS/1e9:.0f}B")
+        print(f"\n✅ TOKEN BUDGET MET: {total_all/1e9:.4f}B ≥ {TOTAL_TARGET_TOKENS/1e9:.0f}B")
     else:
         deficit = TOTAL_TARGET_TOKENS - total_all
-        print(f"\n⚠️  TOKEN BUDGET SHORT: {total_all/1e9:.2f}B < "
-              f"{TOTAL_TARGET_TOKENS/1e9:.0f}B (deficit: {deficit/1e9:.2f}B)")
+        print(f"\n⚠️  TOKEN BUDGET SHORT: {total_all/1e9:.4f}B < "
+              f"{TOTAL_TARGET_TOKENS/1e9:.0f}B (deficit: {deficit/1e9:.4f}B)")
         print("   Re-run with higher --target_docs or check failed domains.")
 
     print(f"\n📦 All data uploaded to: https://huggingface.co/datasets/{HF_REPO_ID}")
@@ -833,7 +957,7 @@ size_categories:
 Tokenized and packed pretraining data for the FORGE-3B language model.
 
 ## Stats
-- **Total tokens**: {total_tokens/1e9:.2f}B
+- **Total tokens**: {total_tokens/1e9:.4f}B
 - **Domains**: {n_domains}/10
 - **Sequence length**: 2048 tokens
 - **Format**: `.npy` shards of shape `(N, 2048)` with dtype `uint32`
@@ -850,7 +974,7 @@ Tokenized and packed pretraining data for the FORGE-3B language model.
             card += f"| {d} | — | — | ✗ |\n"
         else:
             tt = (m.get("train_tokens", 0) + m.get("val_tokens", 0)) / 1e9
-            card += f"| {d} | {m.get('weight_pct', '?')}% | {tt:.2f} | ✓ |\n"
+            card += f"| {d} | {m.get('weight_pct', '?')}% | {tt:.4f} | ✓ |\n"
 
     card += f"""
 ## Usage
@@ -929,6 +1053,8 @@ def main():
                         help="HuggingFace username / organization")
     parser.add_argument("--hf_token", default=None,
                         help="HuggingFace user access token")
+    parser.add_argument("--smoke_test", action="store_true",
+                        help="Run a quick smoke test with capped documents and small shards")
     # Use parse_known_args to ignore notebook kernel parameters (e.g. -f) in Jupyter/Kaggle environments
     args, _ = parser.parse_known_args()
 
@@ -948,6 +1074,7 @@ def main():
         upload=not args.no_upload,
         hf_username=args.hf_username,
         hf_token=args.hf_token,
+        smoke_test=args.smoke_test,
     )
 
 
