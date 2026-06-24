@@ -929,7 +929,8 @@ def main():
                         help="HuggingFace username / organization")
     parser.add_argument("--hf_token", default=None,
                         help="HuggingFace user access token")
-    args = parser.parse_args()
+    # Use parse_known_args to ignore notebook kernel parameters (e.g. -f) in Jupyter/Kaggle environments
+    args, _ = parser.parse_known_args()
 
     logging.basicConfig(
         level=logging.INFO,
