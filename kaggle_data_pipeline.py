@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Iterator, Optional, List, Dict, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import gzip
+import pyarrow
 import pyarrow.parquet as pq
 
 import numpy as np
@@ -227,17 +228,28 @@ class DedupFilter:
 # Background Upload Helper
 # ─────────────────────────────────────────────────────────────────────────────
 
-def upload_single_shard(api, domain: str, path: Path, delete_after_upload: bool = True) -> bool:
-    """Uploads a single shard file to Hugging Face Hub and deletes it locally on success."""
+def upload_single_shard(api, domain: str, path: Path, state_path: Optional[Path] = None, delete_after_upload: bool = True) -> bool:
+    """Uploads a single shard file and optionally a resume state file to Hugging Face Hub, deleting the shard on success."""
     t0 = time.perf_counter()
     try:
         logger.info(f"    [Background Upload] Starting: {domain}/{path.name}")
+        # Upload shard
         api.upload_file(
             path_or_fileobj=str(path),
             path_in_repo=f"{domain}/{path.name}",
             repo_id=HF_REPO_ID,
             repo_type="dataset",
         )
+        # Optionally upload state file
+        if state_path is not None and state_path.exists():
+            api.upload_file(
+                path_or_fileobj=str(state_path),
+                path_in_repo=f"{domain}/resume_state.json",
+                repo_id=HF_REPO_ID,
+                repo_type="dataset",
+            )
+            logger.info(f"    [Background Upload] ✓ Uploaded resume state: {domain}/resume_state.json")
+            
         elapsed = time.perf_counter() - t0
         logger.info(f"    [Background Upload] ✓ Uploaded: {domain}/{path.name} in {elapsed:.1f}s")
         if delete_after_upload:
@@ -462,7 +474,14 @@ def get_domain_files_with_fallback(domain: str, cfg: dict) -> Tuple[str, dict, L
     return hf_id, cfg, []
 
 
-def download_and_extract_texts(domain: str, cfg: dict, files: List[str], target_docs: int) -> Iterator[str]:
+def download_and_extract_texts(
+    domain: str,
+    cfg: dict,
+    files: List[str],
+    target_docs: int,
+    files_to_skip: int = 0,
+    current_file_idx_box: List[int] = None,
+) -> Iterator[str]:
     """Downloads files one by one, yields texts, and deletes them immediately."""
     if not files:
         logger.error(f"  [{domain}] No files to process. Skipping domain.")
@@ -475,7 +494,11 @@ def download_and_extract_texts(domain: str, cfg: dict, files: List[str], target_
     logger.info(f"  [{domain}] Processing {len(files)} raw data files.")
     
     for i, filename in enumerate(files, 1):
-        logger.info(f"  [{domain}] Downloading file {i}/{len(files)}: {filename}")
+        actual_idx = files_to_skip + i - 1
+        if current_file_idx_box is not None:
+            current_file_idx_box[0] = actual_idx
+            
+        logger.info(f"  [{domain}] Downloading file {i}/{len(files)} (index {actual_idx}): {filename}")
         t_dl = time.perf_counter()
         try:
             local_path = hf_hub_download(
@@ -506,6 +529,8 @@ def download_and_extract_texts(domain: str, cfg: dict, files: List[str], target_
                             doc_count += 1
                             if doc_count >= target_docs:
                                 break
+                    texts.clear()
+                    del texts, batch
                     if doc_count >= target_docs:
                         break
             elif filename.endswith((".json", ".jsonl", ".json.gz", ".jsonl.gz")):
@@ -539,8 +564,10 @@ def download_and_extract_texts(domain: str, cfg: dict, files: List[str], target_
         except Exception as e:
             logger.warning(f"  [{domain}] Failed to delete raw file {local_path}: {e}")
             
-        # Force garbage collection to keep RAM flatlined
+        # Force garbage collection and PyArrow memory release to keep RAM flatlined
+        import pyarrow
         gc.collect()
+        pyarrow.default_memory_pool().release_unused()
             
         if doc_count >= target_docs:
             logger.info(f"  [{domain}] Reached target of {target_docs:,} documents. Stopping.")
@@ -571,7 +598,7 @@ def process_domain(
     out_base:   Path,
     seq_len:    int = 2048,
     shard_size: int = 50_000,
-    tokenizer_profile: str = "standard",
+    tokenizer=None,
     hf_api=None,
 ) -> dict:
     """
@@ -617,27 +644,44 @@ def process_domain(
     files_to_skip = 0
     if hf_api is not None:
         try:
-            from huggingface_hub import list_repo_files
-            existing_hub_files = list_repo_files(HF_REPO_ID, repo_type="dataset", token=HF_TOKEN)
-            uploaded_shards = [f for f in existing_hub_files if f.startswith(f"{domain}/train_shard_")]
-            if uploaded_shards:
-                highest_shard = max(uploaded_shards)
-                shard_num = int(highest_shard.split("_")[-1].split(".")[0])
-                start_shard_idx = shard_num + 1
+            from huggingface_hub import hf_hub_download as hf_download
+            # Try to download the exact resume_state.json from the Hub
+            try:
+                state_file = hf_download(
+                    repo_id=HF_REPO_ID,
+                    filename=f"{domain}/resume_state.json",
+                    repo_type="dataset",
+                    token=HF_TOKEN,
+                )
+                with open(state_file) as f:
+                    state = json.load(f)
+                start_shard_idx = state["next_shard_idx"]
+                files_to_skip = max(0, state["last_processed_file_idx"])
+                logger.info(f"[{domain}] Found exact resume state on Hub. Resuming from shard index {start_shard_idx}, skipping first {files_to_skip} files.")
+            except Exception:
+                # Fallback to the shard listing method if resume_state.json is not found
+                from huggingface_hub import list_repo_files
+                existing_hub_files = list_repo_files(HF_REPO_ID, repo_type="dataset", token=HF_TOKEN)
+                uploaded_shards = [f for f in existing_hub_files if f.startswith(f"{domain}/train_shard_")]
+                if uploaded_shards:
+                    highest_shard = max(uploaded_shards)
+                    shard_num = int(highest_shard.split("_")[-1].split(".")[0])
+                    start_shard_idx = shard_num + 1
+                    
+                    # Calculate files to skip
+                    shards_uploaded = start_shard_idx
+                    tokens_processed = shards_uploaded * shard_size * seq_len
+                    target_tokens = final_cfg["target_tokens"]
+                    F = len(files)
+                    if target_tokens > 0 and F > 0:
+                        files_to_skip = int((tokens_processed * F) / target_tokens) - 1
+                        files_to_skip = max(0, files_to_skip)
+                    
+                    logger.info(f"[{domain}] Found {len(uploaded_shards)} shards on Hub. Resuming from shard index {start_shard_idx} (fallback mode).")
                 
-                # Calculate files to skip
-                shards_uploaded = start_shard_idx
-                tokens_processed = shards_uploaded * shard_size * seq_len
-                target_tokens = final_cfg["target_tokens"]
-                F = len(files)
-                if target_tokens > 0 and F > 0:
-                    files_to_skip = int((tokens_processed * F) / target_tokens) - 1
-                    files_to_skip = max(0, files_to_skip)
-                
-                logger.info(f"[{domain}] Found {len(uploaded_shards)} shards on Hub. Resuming from shard index {start_shard_idx}.")
-                if files_to_skip > 0:
-                    logger.info(f"[{domain}] Skipping the first {files_to_skip} raw files out of {F} to resume.")
-                    files = files[files_to_skip:]
+            if files_to_skip > 0:
+                logger.info(f"[{domain}] Skipping the first {files_to_skip} raw files out of {len(files)} to resume.")
+                files = files[files_to_skip:]
         except Exception as e:
             logger.warning(f"[{domain}] Could not check Hub files for partial resume: {e}")
 
@@ -645,10 +689,27 @@ def process_domain(
     upload_executor = ThreadPoolExecutor(max_workers=2)
     upload_futures = []
 
+    # Resume state tracking
+    current_file_idx_box = [files_to_skip]
+
+    def save_resume_state(shard_idx, file_idx):
+        state = {
+            "next_shard_idx": shard_idx,
+            "last_processed_file_idx": file_idx
+        }
+        state_path = domain_dir / "resume_state.json"
+        with open(str(state_path), "w") as f:
+            json.dump(state, f, indent=2)
+
     def on_shard_written(path: Path, delete_after_upload: bool = True):
         if hf_api is not None:
+            # Save the current state before queueing the upload
+            shard_idx = packer._shard_idx
+            file_idx = current_file_idx_box[0]
+            save_resume_state(shard_idx, file_idx)
+            
             future = upload_executor.submit(
-                upload_single_shard, hf_api, domain, path, delete_after_upload
+                upload_single_shard, hf_api, domain, path, domain_dir / "resume_state.json", delete_after_upload
             )
             upload_futures.append(future)
 
@@ -671,16 +732,17 @@ def process_domain(
     n_streamed = n_quality_fail = n_dup = n_tokenized = n_tok_fail = 0
     target_docs = final_cfg["target_docs"]
 
-    # Initialize the ForgeTokenizer on the main thread with 4 threads
-    from tokenizer.crayon_wrapper import ForgeTokenizer
-    logger.info(f"[{domain}] Initializing ForgeTokenizer on main thread (C++ multi-threaded)...")
-    tokenizer = ForgeTokenizer(
-        profile=tokenizer_profile,
-        device="cpu",
-        n_workers=4,
-        add_bos=False,
-        add_eos=False,
-    )
+    # Initialize the ForgeTokenizer if not passed
+    if tokenizer is None:
+        from tokenizer.crayon_wrapper import ForgeTokenizer
+        logger.info(f"[{domain}] Initializing local ForgeTokenizer...")
+        tokenizer = ForgeTokenizer(
+            profile="standard",
+            device="cpu",
+            n_workers=4,
+            add_bos=False,
+            add_eos=False,
+        )
 
     # Batch parameters
     batch_size = 10000
@@ -710,7 +772,7 @@ def process_domain(
 
     # ── Process text stream ──────────────────────────────────────────────────
     try:
-        for text in download_and_extract_texts(domain, final_cfg, files, target_docs):
+        for text in download_and_extract_texts(domain, final_cfg, files, target_docs, files_to_skip, current_file_idx_box):
             n_streamed += 1
             
             # Apply quality filter and deduplication only if domain is not curated
@@ -812,7 +874,7 @@ def process_domain(
             logger.error(f"[{domain}] Failed to upload packing_meta.json: {exc}")
 
     # Free memory
-    del packer, dedup, tokenizer
+    del packer, dedup
     gc.collect()
 
     return meta
@@ -871,6 +933,17 @@ def run_pipeline(
     t0_global = time.perf_counter()
     summaries = []
 
+    # ── Initialize Global Tokenizer ──────────────────────────────────────────
+    from tokenizer.crayon_wrapper import ForgeTokenizer
+    logger.info(f"Initializing global ForgeTokenizer (C++ multi-threaded)...")
+    tokenizer = ForgeTokenizer(
+        profile=tokenizer_profile,
+        device="cpu",
+        n_workers=4,
+        add_bos=False,
+        add_eos=False,
+    )
+
     # ── Process each domain sequentially ─────────────────────────────────────
     for i, domain in enumerate(target_domains, 1):
         cfg = DATASET_REGISTRY[domain].copy()
@@ -893,7 +966,7 @@ def run_pipeline(
                 out_base=out_path,
                 seq_len=seq_len,
                 shard_size=current_shard_size,
-                tokenizer_profile=tokenizer_profile,
+                tokenizer=tokenizer,
                 hf_api=hf_api,
             )
             summaries.append(meta)
@@ -923,6 +996,12 @@ def run_pipeline(
     # ── Create dataset card on HF ────────────────────────────────────────────
     if hf_api is not None:
         _upload_dataset_card(hf_api, summaries)
+
+    # ── Shutdown tokenizer thread pool ───────────────────────────────────────
+    try:
+        tokenizer._thread_pool.shutdown(wait=True)
+    except Exception:
+        pass
 
     elapsed_global = time.perf_counter() - t0_global
 
