@@ -261,7 +261,7 @@ class InlinePacker:
 
     def __init__(self, output_dir: Path, seq_len: int = 2048,
                  shard_size: int = 50_000, split: str = "train",
-                 on_shard_written=None):
+                 on_shard_written=None, start_shard_idx: int = 0):
         self.output_dir = output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.seq_len    = seq_len
@@ -270,9 +270,9 @@ class InlinePacker:
         self.on_shard_written = on_shard_written
         self._buffer: List[int] = []
         self._shard_seqs: List[np.ndarray] = []
-        self._shard_idx  = 0
-        self._n_seqs     = 0
-        self._n_tokens   = 0
+        self._shard_idx  = start_shard_idx
+        self._n_seqs     = start_shard_idx * shard_size
+        self._n_tokens   = self._n_seqs * seq_len
         self._n_docs     = 0
         self._flushed_paths: List[Path] = []
 
@@ -462,17 +462,17 @@ def get_domain_files_with_fallback(domain: str, cfg: dict) -> Tuple[str, dict, L
     return hf_id, cfg, []
 
 
-def download_and_extract_texts(domain: str, cfg: dict, target_docs: int) -> Iterator[str]:
+def download_and_extract_texts(domain: str, cfg: dict, files: List[str], target_docs: int) -> Iterator[str]:
     """Downloads files one by one, yields texts, and deletes them immediately."""
-    hf_id, final_cfg, files = get_domain_files_with_fallback(domain, cfg)
     if not files:
         logger.error(f"  [{domain}] No files to process. Skipping domain.")
         return
         
-    text_key = final_cfg["text_key"]
+    text_key = cfg["text_key"]
+    hf_id = cfg["hf_id"]
     doc_count = 0
     
-    logger.info(f"  [{domain}] Found {len(files)} data files in {hf_id} to process.")
+    logger.info(f"  [{domain}] Processing {len(files)} raw data files.")
     
     for i, filename in enumerate(files, 1):
         logger.info(f"  [{domain}] Downloading file {i}/{len(files)}: {filename}")
@@ -606,6 +606,41 @@ def process_domain(
 
     t0 = time.perf_counter()
 
+    # ── List files and handle fallbacks ──────────────────────────────────────
+    hf_id, final_cfg, files = get_domain_files_with_fallback(domain, cfg)
+    if not files:
+        logger.error(f"[{domain}] No files to process. Skipping domain.")
+        return {"domain": domain, "error": "No files found"}
+
+    # ── RESUME FIX: Check what shards already exist on the HF Hub ───────────
+    start_shard_idx = 0
+    files_to_skip = 0
+    if hf_api is not None:
+        try:
+            from huggingface_hub import list_repo_files
+            existing_hub_files = list_repo_files(HF_REPO_ID, repo_type="dataset", token=HF_TOKEN)
+            uploaded_shards = [f for f in existing_hub_files if f.startswith(f"{domain}/train_shard_")]
+            if uploaded_shards:
+                highest_shard = max(uploaded_shards)
+                shard_num = int(highest_shard.split("_")[-1].split(".")[0])
+                start_shard_idx = shard_num + 1
+                
+                # Calculate files to skip
+                shards_uploaded = start_shard_idx
+                tokens_processed = shards_uploaded * shard_size * seq_len
+                target_tokens = final_cfg["target_tokens"]
+                F = len(files)
+                if target_tokens > 0 and F > 0:
+                    files_to_skip = int((tokens_processed * F) / target_tokens) - 1
+                    files_to_skip = max(0, files_to_skip)
+                
+                logger.info(f"[{domain}] Found {len(uploaded_shards)} shards on Hub. Resuming from shard index {start_shard_idx}.")
+                if files_to_skip > 0:
+                    logger.info(f"[{domain}] Skipping the first {files_to_skip} raw files out of {F} to resume.")
+                    files = files[files_to_skip:]
+        except Exception as e:
+            logger.warning(f"[{domain}] Could not check Hub files for partial resume: {e}")
+
     # ── Initialize background uploader thread pool ───────────────────────────
     upload_executor = ThreadPoolExecutor(max_workers=2)
     upload_futures = []
@@ -622,7 +657,8 @@ def process_domain(
         output_dir=domain_dir,
         seq_len=seq_len,
         shard_size=shard_size,
-        on_shard_written=on_shard_written
+        on_shard_written=on_shard_written,
+        start_shard_idx=start_shard_idx,
     )
     use_quality = cfg.get("quality_filter", True)
     dedup       = DedupFilter()
@@ -633,7 +669,7 @@ def process_domain(
         logger.info(f"[{domain}] Curated domain detected. Skipping quality filtering and deduplication.")
 
     n_streamed = n_quality_fail = n_dup = n_tokenized = n_tok_fail = 0
-    target_docs = cfg["target_docs"]
+    target_docs = final_cfg["target_docs"]
 
     # Initialize the ForgeTokenizer on the main thread with 4 threads
     from tokenizer.crayon_wrapper import ForgeTokenizer
@@ -674,7 +710,7 @@ def process_domain(
 
     # ── Process text stream ──────────────────────────────────────────────────
     try:
-        for text in download_and_extract_texts(domain, cfg, target_docs):
+        for text in download_and_extract_texts(domain, final_cfg, files, target_docs):
             n_streamed += 1
             
             # Apply quality filter and deduplication only if domain is not curated
