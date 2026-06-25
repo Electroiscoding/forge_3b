@@ -557,17 +557,30 @@ def download_and_extract_texts(
                 local_path.unlink()
             continue
             
-        # Delete local file immediately
+        # Delete local file and its resolved target blob from Hugging Face cache completely
         try:
-            local_path.unlink()
-            logger.info(f"  [{domain}] Deleted raw downloaded file: {filename}")
+            local_path = Path(local_path)
+            resolved_path = local_path.resolve()
+            if resolved_path.exists():
+                resolved_path.unlink()
+                logger.info(f"  [{domain}] Deleted raw blob file: {resolved_path.name}")
+            if local_path.exists() and local_path != resolved_path:
+                local_path.unlink()
+                logger.info(f"  [{domain}] Deleted symlink: {local_path.name}")
         except Exception as e:
-            logger.warning(f"  [{domain}] Failed to delete raw file {local_path}: {e}")
+            logger.warning(f"  [{domain}] Failed to delete raw file/symlink {local_path}: {e}")
             
-        # Force garbage collection and PyArrow memory release to keep RAM flatlined
+        # Force garbage collection, PyArrow memory release, and glibc heap trimming to keep RAM flatlined
         import pyarrow
+        import ctypes
         gc.collect()
         pyarrow.default_memory_pool().release_unused()
+        try:
+            libc = ctypes.CDLL("libc.so.6")
+            libc.malloc_trim(0)
+            logger.info(f"  [{domain}] Trimmed glibc malloc heap.")
+        except Exception as e:
+            pass
             
         if doc_count >= target_docs:
             logger.info(f"  [{domain}] Reached target of {target_docs:,} documents. Stopping.")
@@ -708,6 +721,15 @@ def process_domain(
             file_idx = current_file_idx_box[0]
             save_resume_state(shard_idx, file_idx)
             
+            # Backpressure: limit active + queued uploads to max_pending (e.g. 2)
+            max_pending = 2
+            while True:
+                pending = sum(1 for fut in upload_futures if not fut.done())
+                if pending < max_pending:
+                    break
+                logger.info(f"    [Backpressure] {pending} uploads pending. Waiting 5 seconds for queue to clear...")
+                time.sleep(5)
+                
             future = upload_executor.submit(
                 upload_single_shard, hf_api, domain, path, domain_dir / "resume_state.json", delete_after_upload
             )
@@ -876,6 +898,13 @@ def process_domain(
     # Free memory
     del packer, dedup
     gc.collect()
+    try:
+        import ctypes
+        libc = ctypes.CDLL("libc.so.6")
+        libc.malloc_trim(0)
+        logger.info(f"[{domain}] End of domain: trimmed glibc malloc heap.")
+    except Exception:
+        pass
 
     return meta
 
