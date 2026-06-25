@@ -259,9 +259,26 @@ class ForgeTokenizer:
                 ids = ids[:self.max_length]
             return ids
         
-        # Submit all texts to thread pool
-        futures = [self._thread_pool.submit(_tokenize_one, t) for t in texts]
-        all_ids = [f.result() for f in futures]
+        if self.n_workers <= 1:
+            # Run sequentially on the main thread using the primary tokenizer instance
+            # to completely avoid any C++ multi-threading deadlocks.
+            all_ids = []
+            for t in texts:
+                raw = self._tokenizer.tokenize(t)
+                if isinstance(raw, torch.Tensor):
+                    raw = raw.tolist()
+                ids = self._shift_crayon_ids(raw)
+                if add_bos_:
+                    ids = [self.special_tokens["<|bos|>"]] + ids
+                if add_eos_:
+                    ids = ids + [self.special_tokens["<|eos|>"]]
+                if self.max_length is not None:
+                    ids = ids[:self.max_length]
+                all_ids.append(ids)
+        else:
+            # Submit all texts to thread pool
+            futures = [self._thread_pool.submit(_tokenize_one, t) for t in texts]
+            all_ids = [f.result() for f in futures]
         
         if not pad or return_tensors is None:
             return {"input_ids": all_ids}
@@ -330,6 +347,9 @@ class ForgeTokenizer:
         if isinstance(batch_ids, torch.Tensor):
             batch_ids = batch_ids.tolist()
         
+        if self.n_workers <= 1:
+            return [self.decode(ids, skip_special_tokens) for ids in batch_ids]
+            
         futures = [
             self._thread_pool.submit(self.decode, ids, skip_special_tokens)
             for ids in batch_ids

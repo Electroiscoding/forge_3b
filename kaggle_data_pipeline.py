@@ -761,7 +761,7 @@ def process_domain(
         tokenizer = ForgeTokenizer(
             profile="standard",
             device="cpu",
-            n_workers=4,
+            n_workers=1,
             add_bos=False,
             add_eos=False,
         )
@@ -968,7 +968,7 @@ def run_pipeline(
     tokenizer = ForgeTokenizer(
         profile=tokenizer_profile,
         device="cpu",
-        n_workers=4,
+        n_workers=1,
         add_bos=False,
         add_eos=False,
     )
