@@ -767,7 +767,8 @@ def process_domain(
         )
 
     # Batch parameters
-    batch_size = 10000
+    # Optimized for Kaggle RAM (30GB): batch_size reduced to 1000
+    batch_size = 1000
     texts_to_process = []
 
     def flush_batch(batch):
@@ -811,6 +812,7 @@ def process_domain(
             if len(texts_to_process) >= batch_size:
                 flush_batch(texts_to_process)
                 texts_to_process = []
+                gc.collect()  # Force RAM cleanup after each batch
                 
                 elapsed = time.perf_counter() - t0
                 rate = n_tokenized / max(elapsed, 1)
