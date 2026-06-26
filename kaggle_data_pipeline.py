@@ -767,7 +767,7 @@ def process_domain(
         )
 
     # Batch parameters
-    batch_size = 10000
+    batch_size = 1000
     texts_to_process = []
 
     def flush_batch(batch):
