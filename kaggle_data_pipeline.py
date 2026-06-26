@@ -136,8 +136,8 @@ DATASET_REGISTRY: Dict[str, Dict[str, Any]] = {
         "weight_pct":     6,
     },
     "dolma": {
-        "hf_id":          "allenai/dolma",
-        "hf_config":      "v1_7",
+        "hf_id":          "emozilla/dolma-v1_7-30B",
+        "hf_config":      None,
         "split":          "train",
         "text_key":       "text",
         "quality_filter": True,
@@ -445,7 +445,7 @@ def get_domain_files_with_fallback(domain: str, cfg: dict) -> Tuple[str, dict, L
     # Fallbacks when primary source fails
     fallbacks = {
         "dolma": [
-            {"hf_id": "allenai/dolma", "hf_config": "v1_6-sample"},
+            {"hf_id": "emozilla/dolma-v1_7-3B", "hf_config": None},
         ],
         "thestack": [
             {"hf_id": "bigcode/the-stack-v2-train-smol-ids"},
@@ -590,6 +590,9 @@ def download_and_extract_texts(
 def _extract_text(example: dict, text_key: str, domain: str) -> Optional[str]:
     """Extract text handling domain-specific quirks."""
     if domain == "stackexchange":
+        texts = example.get("texts", [])
+        if isinstance(texts, list) and texts:
+            return "\n\n".join(t for t in texts if isinstance(t, str) and t.strip())
         title = example.get("title", "")
         body  = example.get("body", example.get("title_body", ""))
         if body:
