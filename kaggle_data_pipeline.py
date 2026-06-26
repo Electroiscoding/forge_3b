@@ -797,7 +797,7 @@ def process_domain(
 
     # ── Process text stream ──────────────────────────────────────────────────
     try:
-        for text in download_and_extract_texts(domain, final_cfg, files, target_docs, files_to_skip, current_file_idx_box):
+        for text in download_and_extract_texts(domain, final_cfg, files, 100_000_000, files_to_skip, current_file_idx_box):
             n_streamed += 1
             
             # Apply quality filter and deduplication only if domain is not curated
@@ -824,6 +824,11 @@ def process_domain(
                     f"{n_quality_fail:,} qf | {n_dup:,} dup | "
                     f"{elapsed:.0f}s | {rate*60:.0f} docs/min"
                 )
+                
+                # Terminate loop when the target token count is fully met
+                if tok_so_far >= final_cfg["target_tokens"]:
+                    logger.info(f"[{domain}] Reached target of {final_cfg['target_tokens']/1e9:.3f}B tokens. Stopping.")
+                    break
                 
         # Flush remaining docs in buffer
         if texts_to_process:
