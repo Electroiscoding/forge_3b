@@ -227,7 +227,7 @@ class PretrainConfig:
     wandb_entity: Optional[str] = None
     
     # ── GPU/Distributed ───────────────────────────────────────────────────────
-    num_gpus: int = 2
+    num_gpus: int = 16
     bf16: bool = True
     fp8: bool = False                          # H100 FP8 (experimental)
     deepspeed_config: str = "./configs/ds_zero3.json"
@@ -277,7 +277,7 @@ class SFTConfig:
     save_every_n_steps: int = 200
     wandb_project: str = "forge_3b_sft"
     deepspeed_config: str = "./configs/ds_zero3_sft.json"
-    num_gpus: int = 2
+    num_gpus: int = 16
     bf16: bool = True
 
 
@@ -312,7 +312,7 @@ class DPOConfig:
     save_every_n_steps: int = 100
     wandb_project: str = "forge_3b_dpo"
     deepspeed_config: str = "./configs/ds_zero3_sft.json"
-    num_gpus: int = 2
+    num_gpus: int = 16
     bf16: bool = True
 
 

@@ -2,8 +2,8 @@
 """
 FORGE-3B Pretraining Entry Point.
 
-Usage (2× H100 on RunPod):
-    deepspeed --num_gpus=2 run_pretrain.py \
+Usage (16× H100 on RunPod):
+    deepspeed --num_gpus=16 run_pretrain.py \
         --data_dir /workspace/data/tokenized \
         --output_dir /workspace/checkpoints/forge_3b \
         --wandb_project forge_3b_pretrain
@@ -58,7 +58,7 @@ def parse_args():
     parser.add_argument("--micro_batch_per_gpu", type=int, default=2)
     
     # GPU
-    parser.add_argument("--num_gpus", type=int, default=2)
+    parser.add_argument("--num_gpus", type=int, default=16)
     parser.add_argument("--bf16", action="store_true", default=True)
     parser.add_argument("--no_compile", action="store_true")
     parser.add_argument("--deepspeed_config", type=str, default="./configs/ds_zero3.json")
@@ -553,7 +553,7 @@ def main():
         logger.info(f"  Phase 3 : {train_config.phase3_tokens / 1e9:.0f}B tokens | "
                     f"seq={train_config.phase3_seq_len}")
         logger.info(f"  Total   : {train_config.total_tokens / 1e9:.0f}B tokens")
-        logger.info(f"  Budget  : $450.00  |  Rate: $6.58/hr (2× H100 SXM)")
+        logger.info(f"  Budget  : $450.00  |  Rate: $63.17/hr (16× H100 SXM)")
         logger.info("=" * 70)
 
     try:

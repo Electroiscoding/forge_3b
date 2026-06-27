@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
 # FORGE-3B Pretraining Launch Script
-# Target: 2× H100 SXM (80 GB) — RunPod community cloud
-# Budget: $450 USD | Rate: $6.58/hr | ETA: ~68 hours
+# Target: 16× H100 SXM (80 GB) — RunPod community cloud
+# Budget: $450 USD | Rate: $63.17/hr | ETA: ~7.1 hours
 # =============================================================================
 set -euo pipefail
 
@@ -32,7 +32,7 @@ SAVE_EVERY="${SAVE_EVERY:-2000000000}"           # checkpoint every 2B tokens
 LOG_EVERY="${LOG_EVERY:-10}"
 
 # Infrastructure
-NUM_GPUS="${NUM_GPUS:-2}"
+NUM_GPUS="${NUM_GPUS:-16}"
 DS_CONFIG="${DS_CONFIG:-./configs/ds_zero3.json}"
 SEED="${SEED:-42}"
 

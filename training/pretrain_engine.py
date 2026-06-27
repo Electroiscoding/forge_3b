@@ -72,7 +72,7 @@ class PretrainEngine:
         self._start_time = time.time()
         
         # Budget tracking (USD)
-        self._hourly_cost = 6.58   # 2× H100 SXM community cloud
+        self._hourly_cost = 63.17   # 16× H100 SXM community cloud
         self._budget = 450.0
         
         # Memory monitor

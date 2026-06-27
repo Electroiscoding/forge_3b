@@ -206,7 +206,7 @@ class DPOEngine:
         
         self._global_step = 0
         self._start_time = time.time()
-        self._hourly_cost = 6.58
+        self._hourly_cost = 63.17
         
         logger.info(f"DPO Engine: beta={config.beta}, loss={config.loss_type}, "
                     f"n_pairs={config.n_preference_pairs}")

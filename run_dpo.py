@@ -2,8 +2,8 @@
 """
 FORGE-3B Direct Preference Optimization (DPO) Entry Point.
 
-Usage (2× H100 on RunPod):
-    deepspeed --num_gpus=2 run_dpo.py \\
+Usage (16× H100 on RunPod):
+    deepspeed --num_gpus=16 run_dpo.py \\
         --base_model  /workspace/checkpoints/forge_3b_sft/final \\
         --data_path   /workspace/data/dpo/preferences.jsonl \\
         --output_dir  /workspace/checkpoints/forge_3b_dpo \\
@@ -215,7 +215,7 @@ def main():
 
     # ── Reference Model (frozen copy of the SFT model) ────────────────────────
     # The reference model is kept in BF16 and set to eval() — never backpropagated.
-    # On 2× H100 this fits fine alongside the policy with ZeRO-3 on the policy.
+    # On 16× H100 this fits fine alongside the policy with ZeRO-3 on the policy.
     logger.info("Building frozen reference model...")
     ref_model = build_forge_3b(model_config)
     ref_model = ref_model.to(device)

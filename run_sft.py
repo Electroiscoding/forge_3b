@@ -2,8 +2,8 @@
 """
 FORGE-3B Supervised Fine-Tuning Entry Point.
 
-Usage (2× H100 on RunPod):
-    deepspeed --num_gpus=2 run_sft.py \\
+Usage (16× H100 on RunPod):
+    deepspeed --num_gpus=16 run_sft.py \\
         --base_model  /workspace/checkpoints/forge_3b_pretrain/final \\
         --data_dir    /workspace/data/sft \\
         --output_dir  /workspace/checkpoints/forge_3b_sft \\
@@ -347,7 +347,7 @@ def main():
         logger.info(f"  Tokens  : {sft_config.total_tokens / 1e9:.1f}B")
         logger.info(f"  Seq len : {sft_config.seq_len}")
         logger.info(f"  LR      : {sft_config.lr_max:.1e} → {sft_config.lr_min:.1e}")
-        logger.info(f"  Budget  : $450  |  Rate: $6.58/hr")
+        logger.info(f"  Budget  : $450  |  Rate: $63.17/hr (16× H100 SXM)")
         logger.info("=" * 60)
 
     try:

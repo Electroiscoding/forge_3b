@@ -29,7 +29,7 @@ GRAD_CLIP="${GRAD_CLIP:-0.3}"
 SAVE_EVERY="${SAVE_EVERY:-100}"
 
 # ── Infrastructure ────────────────────────────────────────────────────────────
-NUM_GPUS="${NUM_GPUS:-2}"
+NUM_GPUS="${NUM_GPUS:-16}"
 DS_CONFIG="${DS_CONFIG:-./configs/ds_zero3_sft.json}"
 SEED="${SEED:-42}"
 TOKENIZER_PROFILE="${TOKENIZER_PROFILE:-standard}"

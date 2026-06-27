@@ -145,7 +145,7 @@ class SFTEngine:
         
         self._global_step = 0
         self._start_time = time.time()
-        self._hourly_cost = 6.58
+        self._hourly_cost = 63.17
     
     def train(
         self,
