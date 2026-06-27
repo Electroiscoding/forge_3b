@@ -141,6 +141,7 @@ def main():
     
     if is_main:
         logger.info(f"Tokenizer: {tokenizer}")
+        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
         model_config.to_json(str(Path(args.output_dir) / "model_config.json"))
         tokenizer.save_pretrained(str(Path(args.output_dir) / "tokenizer"))
     
