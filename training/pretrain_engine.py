@@ -32,6 +32,8 @@ from torch.utils.data import DataLoader
 
 logger = logging.getLogger(__name__)
 
+from training.hub_uploader import upload_folder_async
+
 
 class PretrainEngine:
     """
@@ -149,6 +151,9 @@ class PretrainEngine:
         
         logger.info(f"Checkpoint saved: {ckpt_dir} "
                     f"(${meta['cost_usd']:.2f} spent, ${meta['budget_remaining_usd']:.2f} remaining)")
+        
+        # Upload checkpoint to Hugging Face Hub in the background
+        upload_folder_async(str(ckpt_dir), repo_name="forge-3b-pretrain", folder_in_repo=ckpt_dir.name)
         
         # Rotate old checkpoints
         self._rotate_checkpoints()

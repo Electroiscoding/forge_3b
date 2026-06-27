@@ -24,6 +24,8 @@ from torch.utils.data import DataLoader, Dataset
 
 logger = logging.getLogger(__name__)
 
+from training.hub_uploader import upload_folder_async
+
 
 class PreferenceDataset(Dataset):
     """
@@ -325,6 +327,9 @@ class DPOEngine:
                     ckpt_dir = Path(self.config.output_dir) / f"dpo_step{self._global_step}"
                     ckpt_dir.mkdir(parents=True, exist_ok=True)
                     torch.save(self.policy.state_dict(), str(ckpt_dir / "model.pt"))
+                    logger.info(f"DPO checkpoint saved: {ckpt_dir}")
+                    # Upload checkpoint
+                    upload_folder_async(str(ckpt_dir), repo_name="forge-3b-dpo", folder_in_repo=ckpt_dir.name)
         
         # Save final
         if self.is_main:
@@ -332,6 +337,8 @@ class DPOEngine:
             final_dir.mkdir(parents=True, exist_ok=True)
             torch.save(self.policy.state_dict(), str(final_dir / "model.pt"))
             self.tokenizer.save_pretrained(str(final_dir))
+            # Upload final model
+            upload_folder_async(str(final_dir), repo_name="forge-3b-dpo", folder_in_repo="final")
         
         elapsed_h = (time.time() - self._start_time) / 3600
         final_acc = sum(all_accuracies) / max(1, len(all_accuracies))

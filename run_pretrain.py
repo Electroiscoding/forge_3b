@@ -622,6 +622,10 @@ def main():
         tokenizer.save_pretrained(str(final_dir))
         model_config.to_json(str(final_dir / "model_config.json"))
         logger.info("Tokenizer and model config saved alongside BF16 weights")
+        
+        # Upload final model to Hugging Face Hub in the background
+        from training.hub_uploader import upload_folder_async
+        upload_folder_async(str(final_dir), repo_name="forge-3b-pretrain", folder_in_repo="final")
 
         # Summary banner
         import json as _json

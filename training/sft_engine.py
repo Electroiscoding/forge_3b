@@ -25,6 +25,8 @@ from torch.utils.data import DataLoader, Dataset
 
 logger = logging.getLogger(__name__)
 
+from training.hub_uploader import upload_folder_async
+
 
 class SFTDataset(Dataset):
     """
@@ -227,6 +229,8 @@ class SFTEngine:
                 ckpt_dir.mkdir(parents=True, exist_ok=True)
                 torch.save(self.model.state_dict(), str(ckpt_dir / "model.pt"))
                 logger.info(f"SFT checkpoint saved: {ckpt_dir}")
+                # Upload checkpoint
+                upload_folder_async(str(ckpt_dir), repo_name="forge-3b-sft", folder_in_repo=ckpt_dir.name)
         
         # Save final
         if self.is_main:
@@ -234,6 +238,8 @@ class SFTEngine:
             final_dir.mkdir(parents=True, exist_ok=True)
             torch.save(self.model.state_dict(), str(final_dir / "model.pt"))
             self.tokenizer.save_pretrained(str(final_dir))
+            # Upload final model
+            upload_folder_async(str(final_dir), repo_name="forge-3b-sft", folder_in_repo="final")
         
         elapsed_h = (time.time() - self._start_time) / 3600
         logger.info(f"SFT complete: {elapsed_h:.1f}h, ${elapsed_h*self._hourly_cost:.2f}")
