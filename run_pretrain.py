@@ -147,10 +147,10 @@ def main():
     
     # ── Model ─────────────────────────────────────────────────────────────────
     logger.info("Building FORGE-3B model...")
-    # Initialize directly on GPU to prevent CPU RAM OOM (SIGKILL -9)
     from model.forge_model import build_forge_3b
-    with device:
-        model = build_forge_3b(model_config)
+
+    model = build_forge_3b(model_config)
+    model = model.to(device)
 
     n_params_total = sum(p.numel() for p in model.parameters())
     n_params_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)

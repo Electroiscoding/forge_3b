@@ -184,10 +184,10 @@ def main():
 
     # ── Model ─────────────────────────────────────────────────────────────────
     logger.info("Building FORGE-3B model...")
-    # Initialize directly on GPU to prevent CPU RAM OOM (SIGKILL -9)
     from model.forge_model import build_forge_3b
-    with device:
-        model = build_forge_3b(model_config)
+
+    model = build_forge_3b(model_config)
+    model = model.to(device)
 
     # Load pretrained weights
     logger.info(f"Loading pretrained weights from {args.base_model}...")
