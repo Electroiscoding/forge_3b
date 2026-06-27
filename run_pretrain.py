@@ -370,13 +370,15 @@ def main():
     if not _p3_datasets:
         logger.warning(
             "No Phase-3 long-doc packs found — "
-            "reusing Phase-2 datasets reshaped to seq=4096."
+            "re-loading Phase-2 domains at seq=4096."
         )
-        # Try to reuse Phase-2 files but reshaped — many may lack 4096-length packs;
-        # training will continue with whatever domains are available.
-        for key, ds in _p2_datasets.items():
-            _p3_datasets[key] = ds
-            _p3_weights[key]  = _p2_weights[key]
+        # Re-load Phase-2 domain directories with the Phase-3 seq_len so the
+        # PackedTokenDataset reshapes the raw data to (N, 4096) correctly.
+        for key, (subdir, weight) in _p2_domains.items():
+            ds = _try_load_domain(subdir, seq_len=train_config.phase3_seq_len)
+            if ds is not None:
+                _p3_datasets[key] = ds
+                _p3_weights[key]  = weight
 
     p3_target_seqs = train_config.phase3_tokens // train_config.phase3_seq_len
     phase3_mixer = WeightedDataMixer(

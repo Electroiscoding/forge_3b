@@ -26,7 +26,7 @@
   },
   "gradient_clipping": 1.0,
   "train_micro_batch_size_per_gpu": 2,
-  "gradient_accumulation_steps": 244,
+  "gradient_accumulation_steps": "auto",
   "steps_per_print": 100,
   "wall_clock_breakdown": false,
   "comms_logger": {

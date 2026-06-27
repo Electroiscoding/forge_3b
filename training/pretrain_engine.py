@@ -96,6 +96,8 @@ class PretrainEngine:
             
             # Inject dynamic values
             ds_config["train_micro_batch_size_per_gpu"] = self.config.micro_batch_size_per_gpu
+            # Inject GA steps — Phase 2 default; overridden per-phase in run_phase()
+            ds_config["gradient_accumulation_steps"] = self.config.gradient_accumulation_steps_phase2
             
             model_engine, optimizer, _, _ = deepspeed.initialize(
                 model=model,
