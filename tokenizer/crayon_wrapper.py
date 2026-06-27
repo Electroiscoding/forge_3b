@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import gc
+import math
 import time
 import logging
 import threading
@@ -650,6 +651,3 @@ def _flush_to_disk(sequences: List[List[int]], output_path: str, offset: int):
     # Also write offset index for random access
     with open(output_path + ".idx", "ab") as f:
         np.save(f, np.array([offset], dtype=np.int64))
-
-
-import math

@@ -160,13 +160,13 @@ class ARGLayer(nn.Module):
     def _sinusoidal_pe(self, position: int, device: torch.device) -> torch.Tensor:
         """Sinusoidal position encoding vector for position 'position'."""
         d = self.d_model
+        pos_tensor = torch.tensor(float(position), device=device, dtype=torch.float32)
+        i = torch.arange(0, d, 2, device=device, dtype=torch.float32)
+        denom = torch.pow(10000.0, i / d)
+        angles = pos_tensor / denom
         pe = torch.zeros(d, device=device, dtype=torch.float32)
-        pos_tensor = torch.tensor(float(position), device=device)
-        for i in range(0, d, 2):
-            denom = 10000.0 ** (i / d)
-            pe[i] = torch.sin(pos_tensor / denom)
-            if i + 1 < d:
-                pe[i + 1] = torch.cos(pos_tensor / denom)
+        pe[0::2] = torch.sin(angles)
+        pe[1::2] = torch.cos(angles)
         return pe
     
     def _cpb_initial_state(self, B: int, position_offset: int, 

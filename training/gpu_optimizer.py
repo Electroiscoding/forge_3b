@@ -16,7 +16,7 @@ import gc
 import time
 import logging
 import contextlib
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 import torch
 import torch.nn as nn
@@ -60,7 +60,6 @@ def setup_distributed(
     Returns (rank, world_size, local_rank).
     """
     import datetime
-    from typing import Tuple
     
     if "RANK" not in os.environ:
         # Single-GPU training

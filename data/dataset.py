@@ -141,12 +141,7 @@ class WeightedDataMixer(Dataset):
         rng = np.random.default_rng(seed)
         self.plan = rng.choice(len(self.names), size=total_samples, p=self.probs)
         
-        # Per-dataset indices
-        self.ds_indices = {
-            n: iter(rng.permutation(len(d)).tolist() + 
-                    rng.permutation(len(d)).tolist())  # 2 epochs for overflow
-            for n, d in datasets.items()
-        }
+
         
         logger.info(f"WeightedDataMixer: {total_samples:,} total samples from "
                     f"{len(datasets)} sources with weights {weights}")

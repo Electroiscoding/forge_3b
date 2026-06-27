@@ -511,11 +511,11 @@ class ForgeModel(nn.Module):
             if isinstance(l.ffn, HSELayer)
             for p in l.ffn.parameters()
         )
-        counts["hse_ffn_active"] = sum(
-            l.ffn.top_k * l.ffn.n_experts_per_domain * 
-            3 * l.ffn.d_model * l.ffn.d_ff_expert
-            for l in self.layers if isinstance(l.ffn, HSELayer)
-        ) // l.ffn.n_experts_per_domain if any(isinstance(l.ffn, HSELayer) for l in self.layers) else 0
+        hse_active = 0
+        for l in self.layers:
+            if isinstance(l.ffn, HSELayer):
+                hse_active += l.ffn.top_k * 3 * l.ffn.d_model * l.ffn.d_ff_expert
+        counts["hse_ffn_active"] = hse_active
         return counts
 
 
