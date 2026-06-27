@@ -201,8 +201,9 @@ def main():
     logger.info("Building FORGE-3B policy model...")
     from model.forge_model import build_forge_3b
 
-    policy_model = build_forge_3b(model_config)
-    policy_model = policy_model.to(device)
+    # Initialize directly on GPU to prevent CPU RAM OOM (SIGKILL -9)
+    with device:
+        policy_model = build_forge_3b(model_config)
     _load_model_weights(policy_model, Path(args.base_model), args.bf16, logger)
 
     # Resume from a prior DPO checkpoint if requested
@@ -217,8 +218,8 @@ def main():
     # The reference model is kept in BF16 and set to eval() — never backpropagated.
     # On 16× H100 this fits fine alongside the policy with ZeRO-3 on the policy.
     logger.info("Building frozen reference model...")
-    ref_model = build_forge_3b(model_config)
-    ref_model = ref_model.to(device)
+    with device:
+        ref_model = build_forge_3b(model_config)
     _load_model_weights(ref_model, Path(args.base_model), args.bf16, logger)
 
     # Hard-freeze the reference model — zero optimizer memory
