@@ -1,0 +1,649 @@
+{
+  "generatedAt": "2026-07-03T18:51:17.964Z",
+  "files": {
+    "README.md": {
+      "size": 93432,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [],
+        "functions": []
+      }
+    },
+    "config.py": {
+      "size": 17538,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [
+          "ForgeModelConfig",
+          "PretrainConfig",
+          "SFTConfig",
+          "DPOConfig",
+          "CrayonConfig"
+        ],
+        "functions": [
+          "n_params_total",
+          "to_json",
+          "from_json",
+          "gradient_accumulation_steps_phase2"
+        ]
+      }
+    },
+    "configs/ds_zero3.json": {
+      "size": 1411,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [],
+        "functions": []
+      }
+    },
+    "configs/ds_zero3_sft.json": {
+      "size": 1405,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [],
+        "functions": []
+      }
+    },
+    "configs/forge_3b.json": {
+      "size": 1865,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [],
+        "functions": []
+      }
+    },
+    "data/__init__.py": {
+      "size": 0,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [],
+        "functions": []
+      }
+    },
+    "data/dataset.py": {
+      "size": 6379,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [
+          "PackedTokenDataset",
+          "WeightedDataMixer"
+        ],
+        "functions": [
+          "__init__",
+          "_get_item_from_mmap",
+          "__len__",
+          "__getitem__",
+          "build_dataloader"
+        ]
+      }
+    },
+    "data/packing.py": {
+      "size": 18070,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [
+          "GreedyPacker",
+          "ShardWriter"
+        ],
+        "functions": [
+          "iter_jsonl_documents",
+          "iter_token_arrays",
+          "__init__",
+          "add",
+          "flush",
+          "stats",
+          "_detect_next_shard_idx",
+          "_shard_path",
+          "_flush",
+          "finalize",
+          "total_sequences",
+          "_tokenize_worker",
+          "pack_domain",
+          "_pack_split",
+          "_build_arg_parser"
+        ]
+      }
+    },
+    "data/preprocessing.py": {
+      "size": 16305,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [
+          "DedupFilter"
+        ],
+        "functions": [
+          "is_quality_document",
+          "__init__",
+          "is_duplicate",
+          "n_seen",
+          "iter_documents",
+          "preprocess_domain",
+          "preprocess_all",
+          "_build_arg_parser"
+        ]
+      }
+    },
+    "evaluation/eval_harness.py": {
+      "size": 27402,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [
+          "EvalHarness"
+        ],
+        "functions": [
+          "load_forge_model",
+          "evaluate_perplexity",
+          "evaluate_multiple_choice",
+          "evaluate_humaneval",
+          "_truncate_completion",
+          "_greedy_or_sample",
+          "evaluate_gsm8k",
+          "_extract_gsm8k_number",
+          "__init__",
+          "run_ppl",
+          "run_mmlu",
+          "run_hellaswag",
+          "run_gsm8k",
+          "run_humaneval",
+          "run_all",
+          "_save_results",
+          "_print_summary"
+        ]
+      }
+    },
+    "kaggle_data_pipeline.py": {
+      "size": 51921,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [
+          "DedupFilter",
+          "InlinePacker"
+        ],
+        "functions": [
+          "is_quality_document",
+          "__init__",
+          "is_duplicate",
+          "seen_count",
+          "upload_single_shard",
+          "add_tokens",
+          "_drain",
+          "_flush_shard",
+          "finalize",
+          "write_val_split",
+          "ensure_hf_repo",
+          "get_dataset_files",
+          "get_domain_files_with_fallback",
+          "download_and_extract_texts",
+          "_extract_text",
+          "process_domain",
+          "save_resume_state",
+          "on_shard_written",
+          "flush_batch",
+          "run_pipeline",
+          "_upload_dataset_card",
+          "main"
+        ]
+      }
+    },
+    "model/__init__.py": {
+      "size": 0,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [],
+        "functions": []
+      }
+    },
+    "model/arg_layer.py": {
+      "size": 15815,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [
+          "ARGLayer"
+        ],
+        "functions": [
+          "__init__",
+          "_init_weights",
+          "_sinusoidal_pe",
+          "_cpb_initial_state",
+          "recurrent_branch",
+          "local_attention_branch",
+          "forward"
+        ]
+      }
+    },
+    "model/dgn_norm.py": {
+      "size": 2344,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [
+          "DifferentialGroupNorm",
+          "RMSNorm"
+        ],
+        "functions": [
+          "__init__",
+          "forward",
+          "extra_repr",
+          "build_norm"
+        ]
+      }
+    },
+    "model/forge_model.py": {
+      "size": 21896,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [
+          "ForgeBlock",
+          "ForgeModel"
+        ],
+        "functions": [
+          "__init__",
+          "forward",
+          "_init_weights",
+          "get_input_embeddings",
+          "set_input_embeddings",
+          "enable_gradient_checkpointing",
+          "disable_gradient_checkpointing",
+          "_forward_layer",
+          "generate",
+          "count_parameters",
+          "build_forge_3b"
+        ]
+      }
+    },
+    "model/hse_layer.py": {
+      "size": 12360,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [
+          "FeedForwardExpert",
+          "DenseSwiGLUFFN",
+          "HSELayer"
+        ],
+        "functions": [
+          "__init__",
+          "forward",
+          "_init_weights",
+          "update_gumbel_tau",
+          "_compute_aux_loss"
+        ]
+      }
+    },
+    "model/mha_layer.py": {
+      "size": 6030,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [
+          "GlobalMHALayer"
+        ],
+        "functions": [
+          "__init__",
+          "_init_weights",
+          "clear_kv_cache",
+          "forward"
+        ]
+      }
+    },
+    "model/rotary_embedding.py": {
+      "size": 6366,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [
+          "RotaryEmbedding"
+        ],
+        "functions": [
+          "__init__",
+          "_build_inv_freq",
+          "_build_cache",
+          "get_cos_sin",
+          "apply_rotary",
+          "forward",
+          "_rotate_half_apply"
+        ]
+      }
+    },
+    "model/triton_kernels.py": {
+      "size": 17042,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [
+          "FusedDGN",
+          "ComplexSSMScan"
+        ],
+        "functions": [
+          "_rms_norm_fwd_kernel",
+          "_dgn_fwd_kernel",
+          "_swiglu_fwd_kernel",
+          "_rope_fwd_kernel",
+          "forward",
+          "backward",
+          "_dgn_pytorch",
+          "_compute_rstd_pytorch",
+          "fused_dgn",
+          "fused_swiglu",
+          "_complex_scan_pytorch",
+          "complex_ssm_scan"
+        ]
+      }
+    },
+    "run_dpo.py": {
+      "size": 16647,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [],
+        "functions": [
+          "_build_arg_parser",
+          "_setup_distributed",
+          "_load_model_weights",
+          "main"
+        ]
+      }
+    },
+    "run_pretrain.py": {
+      "size": 30714,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [],
+        "functions": [
+          "parse_args",
+          "main",
+          "_try_load_domain"
+        ]
+      }
+    },
+    "run_sft.py": {
+      "size": 16811,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [],
+        "functions": [
+          "_build_arg_parser",
+          "_setup_distributed",
+          "main"
+        ]
+      }
+    },
+    "scripts/dpo.sh": {
+      "size": 5408,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [],
+        "functions": []
+      }
+    },
+    "scripts/prep_post_training_data.py": {
+      "size": 17974,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [],
+        "functions": [
+          "parse_hh_dialogue",
+          "prep_sft_dataset",
+          "prep_dpo_dataset",
+          "main"
+        ]
+      }
+    },
+    "scripts/pretrain.sh": {
+      "size": 5545,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [],
+        "functions": []
+      }
+    },
+    "scripts/sft.sh": {
+      "size": 5473,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [],
+        "functions": []
+      }
+    },
+    "tokenizer/__init__.py": {
+      "size": 0,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [],
+        "functions": []
+      }
+    },
+    "tokenizer/crayon_wrapper.py": {
+      "size": 26497,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [
+          "ForgeTokenizer"
+        ],
+        "functions": [
+          "_get_thread_local_tokenizer",
+          "__init__",
+          "_shift_crayon_ids",
+          "_unshift_crayon_ids",
+          "encode",
+          "encode_batch",
+          "_tokenize_one",
+          "decode",
+          "decode_batch",
+          "encode_chat",
+          "encode_chat_with_labels",
+          "tokenize_file_streaming",
+          "__repr__",
+          "save_pretrained",
+          "from_pretrained",
+          "__del__",
+          "_tokenize_chunk_worker",
+          "_flush_to_disk"
+        ]
+      }
+    },
+    "tokenizer/data_collator.py": {
+      "size": 7969,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [
+          "PretrainCollator",
+          "SFTCollator",
+          "DPOCollator"
+        ],
+        "functions": [
+          "__call__",
+          "_pad_batch",
+          "get_collator"
+        ]
+      }
+    },
+    "tokenizer/streaming_tokenizer.py": {
+      "size": 10852,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [
+          "StreamingTokenizer"
+        ],
+        "functions": [
+          "__init__",
+          "_detect_next_shard",
+          "_shard_path",
+          "_flush_shard",
+          "_drain_buffer",
+          "add_document",
+          "add_token_array",
+          "finalize",
+          "_iter_texts"
+        ]
+      }
+    },
+    "training/__init__.py": {
+      "size": 0,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [],
+        "functions": []
+      }
+    },
+    "training/dpo_engine.py": {
+      "size": 14451,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [
+          "PreferenceDataset",
+          "DPOEngine"
+        ],
+        "functions": [
+          "__init__",
+          "__len__",
+          "__getitem__",
+          "_make_input_labels",
+          "dpo_loss",
+          "get_log_probs",
+          "train"
+        ]
+      }
+    },
+    "training/gpu_optimizer.py": {
+      "size": 14619,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [
+          "GPUMemoryMonitor",
+          "ThroughputMeter"
+        ],
+        "functions": [
+          "warmup_gpu",
+          "setup_distributed",
+          "compile_model",
+          "bf16_autocast",
+          "fp8_autocast_context",
+          "__init__",
+          "snapshot",
+          "check_oom_risk",
+          "log_memory",
+          "clear",
+          "offload_to_cpu",
+          "load_to_gpu",
+          "clip_grad_norm_and_log",
+          "log_gradient_stats",
+          "_get_peak_tflops",
+          "start_step",
+          "end_step",
+          "get_stats",
+          "log_stats"
+        ]
+      }
+    },
+    "training/hub_uploader.py": {
+      "size": 2352,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [],
+        "functions": [
+          "_upload_worker",
+          "upload_folder_async"
+        ]
+      }
+    },
+    "training/optimizer.py": {
+      "size": 4589,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [],
+        "functions": [
+          "build_optimizer",
+          "get_current_lr"
+        ]
+      }
+    },
+    "training/pretrain_engine.py": {
+      "size": 20669,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [
+          "PretrainEngine"
+        ],
+        "functions": [
+          "__init__",
+          "_setup_deepspeed",
+          "_save_checkpoint",
+          "_rotate_checkpoints",
+          "_log_step",
+          "_update_moe_temperature",
+          "run_phase",
+          "train",
+          "_set_local_window",
+          "_enable_yarn_scaling"
+        ]
+      }
+    },
+    "training/scheduler.py": {
+      "size": 2682,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [
+          "CosineWarmupScheduler",
+          "ConstantLRScheduler"
+        ],
+        "functions": [
+          "__init__",
+          "step",
+          "get_lr",
+          "state_dict",
+          "load_state_dict"
+        ]
+      }
+    },
+    "training/sft_engine.py": {
+      "size": 8892,
+      "structure": {
+        "imports": [],
+        "exports": [],
+        "classes": [
+          "SFTDataset",
+          "SFTEngine"
+        ],
+        "functions": [
+          "__init__",
+          "_pack_conversations",
+          "__len__",
+          "__getitem__",
+          "train"
+        ]
+      }
+    }
+  }
+}
