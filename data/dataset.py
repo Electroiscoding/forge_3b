@@ -59,6 +59,18 @@ class PackedTokenDataset(Dataset):
                     n_seqs = len(arr) // seq_len
                     arr = arr[:n_seqs * seq_len].reshape(n_seqs, seq_len)
                 
+                if arr.ndim == 2 and arr.shape[1] != seq_len:
+                    # 2D array with different seq_len — flatten and re-chunk.
+                    # E.g. (50000, 2048) with seq_len=512 → (200000, 512)
+                    # E.g. (50000, 2048) with seq_len=4096 → (25000, 4096)
+                    flat = arr.reshape(-1)   # triggers a copy from mmap, but necessary
+                    n_seqs = len(flat) // seq_len
+                    if n_seqs == 0:
+                        logger.warning(f"File {f}: too few tokens to form seq_len={seq_len}. Skipping.")
+                        continue
+                    arr = flat[:n_seqs * seq_len].reshape(n_seqs, seq_len)
+                    logger.debug(f"Reshaped {f}: {arr.shape[0]} sequences at seq_len={seq_len}")
+                
                 if arr.shape[1] != seq_len:
                     logger.warning(f"File {f} has seq_len={arr.shape[1]}, expected {seq_len}. Skipping.")
                     continue
