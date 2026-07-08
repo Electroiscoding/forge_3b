@@ -309,7 +309,7 @@ class PretrainEngine:
                 step_loss += loss.item() * gradient_accumulation_steps
                 aux = outputs.get("aux_loss")
                 if aux is not None:
-                    step_aux += float(aux) / gradient_accumulation_steps
+                    step_aux += float(aux.detach()) / gradient_accumulation_steps
             
             # Gradient clipping and optimizer step
             if hasattr(model, "step"):
