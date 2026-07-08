@@ -247,9 +247,11 @@ class ForgeModel(nn.Module):
         self._init_weights()
         
         # Log parameter count
-        n_params = sum(p.numel() for p in self.parameters())
+        n_params = sum(p.ds_numel if hasattr(p, "ds_numel") else p.numel() for p in self.parameters())
         logger.info(f"ForgeModel: {n_params/1e9:.3f}B total parameters")
-        logger.info(f"  Embedding: {self.embed_tokens.weight.numel()/1e6:.1f}M")
+        emb_p = self.embed_tokens.weight
+        emb_numel = emb_p.ds_numel if hasattr(emb_p, "ds_numel") else emb_p.numel()
+        logger.info(f"  Embedding: {emb_numel/1e6:.1f}M")
         logger.info(f"  N layers: {config.n_layers} "
                     f"({len(mha_set)} MHA + {config.n_layers - len(mha_set)} ARG, "
                     f"{len(hse_set)} HSE + {config.n_layers - len(hse_set)} Dense)")
