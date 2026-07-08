@@ -266,7 +266,15 @@ class ForgeModel(nn.Module):
             elif isinstance(module, nn.Embedding):
                 nn.init.normal_(module.weight, std=self.config.init_std)
                 if module.padding_idx is not None:
-                    module.weight.data[module.padding_idx].zero_()
+                    if hasattr(module.weight, "ds_id"):
+                        import deepspeed
+                        with deepspeed.zero.GatheredParameters(module.weight, modifier_rank=0):
+                            import torch.distributed as dist
+                            rank = dist.get_rank() if dist.is_initialized() else 0
+                            if rank == 0:
+                                module.weight.data[module.padding_idx].zero_()
+                    else:
+                        module.weight.data[module.padding_idx].zero_()
         
         # Residual scaling: scale output projections by 1/sqrt(2*n_layers)
         # This prevents the residual stream from growing with depth

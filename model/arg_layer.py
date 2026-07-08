@@ -158,8 +158,17 @@ class ARGLayer(nn.Module):
         
         # Conv1d — identity-like init
         nn.init.zeros_(self.conv1d.weight)
-        for i in range(self.d_inner):
-            self.conv1d.weight.data[i, 0, -1] = 1.0  # last tap = 1 → identity
+        if hasattr(self.conv1d.weight, "ds_id"):
+            import deepspeed
+            with deepspeed.zero.GatheredParameters(self.conv1d.weight, modifier_rank=0):
+                import torch.distributed as dist
+                rank = dist.get_rank() if dist.is_initialized() else 0
+                if rank == 0:
+                    for i in range(self.d_inner):
+                        self.conv1d.weight.data[i, 0, -1] = 1.0
+        else:
+            for i in range(self.d_inner):
+                self.conv1d.weight.data[i, 0, -1] = 1.0
     
     # ─────────────────────────────────────────────────────────────────────────
     # CPB: Initial State from Position
