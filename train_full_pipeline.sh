@@ -62,6 +62,8 @@ SKIP_PRETRAIN=0
 SKIP_SFT=0
 NO_COMPILE=""
 NO_GC=""
+LOG_EVERY=10
+
 
 # ── Parse args ───────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -80,6 +82,7 @@ while [[ $# -gt 0 ]]; do
     --skip_sft)        SKIP_SFT=1;           shift ;;
     --no_compile)      NO_COMPILE="--no_compile"; shift ;;
     --no_gradient_checkpointing) NO_GC="--no_gradient_checkpointing"; shift ;;
+    --log_every)       LOG_EVERY="$2";       shift 2 ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
@@ -146,6 +149,7 @@ else
     --num_gpus          "$NUM_GPUS" \
     --wandb_project     "${WANDB_PROJECT}_pretrain" \
     --deepspeed_config  "$DS_CFG" \
+    --log_every         "$LOG_EVERY" \
     $NO_COMPILE \
     $NO_GC \
     2>&1 | tee "$LOGS_DIR/pretrain.log"
@@ -179,6 +183,7 @@ else
     --output_dir    "$SFT_OUT" \
     --wandb_project "${WANDB_PROJECT}_sft" \
     --deepspeed_config "$DS_CFG" \
+    --log_every        "$LOG_EVERY" \
     $NO_COMPILE \
     $NO_GC \
     2>&1 | tee "$LOGS_DIR/sft.log"
