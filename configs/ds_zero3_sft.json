@@ -9,7 +9,7 @@
     "stage3_max_live_parameters": 536870912,
     "stage3_max_reuse_distance": 536870912,
     "stage3_gather_16bit_weights_on_model_save": true,
-    "sub_group_size": 100000000000,
+    "sub_group_size": 1000000000,
     "reduce_scatter": true,
     "allgather_partitions": true,
     "allgather_bucket_size": 100000000,

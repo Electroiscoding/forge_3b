@@ -47,6 +47,12 @@ elif [[ -f "/workspace/venv/bin/activate" ]]; then
   source /workspace/venv/bin/activate
 fi
 
+# ── Disable P2P and IB to prevent single-GPU RCCL deadlocks ───────────────────
+export NCCL_P2P_DISABLE=1
+export NCCL_IB_DISABLE=1
+export RCCL_P2P_DISABLE=1
+export RCCL_IB_DISABLE=1
+
 # ── Defaults ─────────────────────────────────────────────────────────────────
 WORKSPACE="/workspace"
 NUM_GPUS=""          # auto-detect below
