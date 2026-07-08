@@ -16,6 +16,19 @@ from torch.utils.data import Dataset, DataLoader, IterableDataset
 
 logger = logging.getLogger(__name__)
 
+# Dynamically raise the file descriptor limit to avoid "Too many open files" errors with large shard counts
+try:
+    import resource
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    target = 65536
+    if hard != resource.RLIM_INFINITY:
+        target = min(target, hard)
+    if target > soft:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+        logger.info(f"Raised open file limit (RLIMIT_NOFILE): {soft} → {target}")
+except Exception as e:
+    logger.debug(f"Failed to raise open file limit: {e}")
+
 
 class PackedTokenDataset(Dataset):
     """
