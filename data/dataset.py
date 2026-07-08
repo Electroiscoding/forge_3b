@@ -60,39 +60,42 @@ class PackedTokenDataset(Dataset):
         if not npy_files:
             raise FileNotFoundError(f"No .npy files found in {data_dir}")
         
-        # Load all files as memory-mapped arrays
-        self.mmaps = []
+        # Index all files to get their shapes and sequence counts without keeping files open
+        self.file_paths = []
         self.cumulative_lengths = [0]
         
         for f in npy_files:
             try:
+                # Open briefly to inspect shape and calculate sequence count
                 arr = np.load(str(f), mmap_mode='r')
-                if arr.ndim == 1:
-                    # Flat token array — reshape to sequences
+                shape = arr.shape
+                ndim = arr.ndim
+                
+                # Calculate n_seqs for this file
+                if ndim == 1:
                     n_seqs = len(arr) // seq_len
-                    arr = arr[:n_seqs * seq_len].reshape(n_seqs, seq_len)
-                
-                if arr.ndim == 2 and arr.shape[1] != seq_len:
-                    # 2D array with different seq_len — flatten and re-chunk.
-                    # E.g. (50000, 2048) with seq_len=512 → (200000, 512)
-                    # E.g. (50000, 2048) with seq_len=4096 → (25000, 4096)
-                    flat = arr.reshape(-1)   # triggers a copy from mmap, but necessary
-                    n_seqs = len(flat) // seq_len
-                    if n_seqs == 0:
-                        logger.warning(f"File {f}: too few tokens to form seq_len={seq_len}. Skipping.")
-                        continue
-                    arr = flat[:n_seqs * seq_len].reshape(n_seqs, seq_len)
-                    logger.debug(f"Reshaped {f}: {arr.shape[0]} sequences at seq_len={seq_len}")
-                
-                if arr.shape[1] != seq_len:
-                    logger.warning(f"File {f} has seq_len={arr.shape[1]}, expected {seq_len}. Skipping.")
+                elif ndim == 2:
+                    if shape[1] == seq_len:
+                        n_seqs = shape[0]
+                    else:
+                        total_tokens = shape[0] * shape[1]
+                        n_seqs = total_tokens // seq_len
+                else:
+                    logger.warning(f"File {f} has ndim={ndim}, expected 1 or 2. Skipping.")
                     continue
                 
-                self.mmaps.append(arr)
-                self.cumulative_lengths.append(self.cumulative_lengths[-1] + len(arr))
-                logger.debug(f"Loaded {f}: {len(arr)} sequences")
+                if n_seqs == 0:
+                    logger.warning(f"File {f}: too few tokens to form seq_len={seq_len}. Skipping.")
+                    continue
+                
+                self.file_paths.append(str(f))
+                self.cumulative_lengths.append(self.cumulative_lengths[-1] + n_seqs)
+                logger.debug(f"Indexed {f}: {n_seqs} sequences")
+                
+                # Let garbage collector close the file handle immediately
+                del arr
             except Exception as e:
-                logger.warning(f"Failed to load {f}: {e}")
+                logger.warning(f"Failed to index {f}: {e}")
         
         self.total_sequences = self.cumulative_lengths[-1]
         
@@ -109,8 +112,8 @@ class PackedTokenDataset(Dataset):
                     f"{self.total_sequences * seq_len / 1e9:.2f}B tokens total")
     
     def _get_item_from_mmap(self, global_idx: int) -> np.ndarray:
-        """Binary search for the correct mmap file."""
-        lo, hi = 0, len(self.mmaps) - 1
+        """Binary search for the correct file path and load slice dynamically."""
+        lo, hi = 0, len(self.file_paths) - 1
         while lo < hi:
             mid = (lo + hi) // 2
             if global_idx < self.cumulative_lengths[mid + 1]:
@@ -119,7 +122,34 @@ class PackedTokenDataset(Dataset):
                 lo = mid + 1
         
         local_idx = global_idx - self.cumulative_lengths[lo]
-        return self.mmaps[lo][local_idx]
+        file_path = self.file_paths[lo]
+        
+        # Open memmap file briefly to read the required segment
+        arr = np.load(file_path, mmap_mode='r')
+        
+        token_start = local_idx * self.seq_len
+        token_end = token_start + self.seq_len
+        
+        if arr.ndim == 1:
+            tokens = np.array(arr[token_start:token_end])
+        elif arr.ndim == 2:
+            w_source = arr.shape[1]
+            if w_source == self.seq_len:
+                tokens = np.array(arr[local_idx])
+            else:
+                # Dynamic sub-slice mapping to prevent reading the entire file
+                row_start = token_start // w_source
+                row_end = (token_end - 1) // w_source
+                sub_arr = arr[row_start : row_end + 1]
+                flat = sub_arr.reshape(-1)
+                
+                col_start = token_start % w_source
+                col_end = col_start + self.seq_len
+                tokens = np.array(flat[col_start:col_end])
+        else:
+            raise ValueError(f"Unexpected array dimension {arr.ndim} in {file_path}")
+            
+        return tokens
     
     def __len__(self) -> int:
         return self.total_sequences
@@ -127,7 +157,7 @@ class PackedTokenDataset(Dataset):
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         global_idx = int(self.indices[idx % len(self.indices)])
         tokens = self._get_item_from_mmap(global_idx).astype(np.int64)
-        tokens_tensor = torch.from_numpy(tokens)  # zero-copy with numpy
+        tokens_tensor = torch.from_numpy(tokens)
         
         return {
             "input_ids": tokens_tensor,
