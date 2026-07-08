@@ -109,7 +109,7 @@ class ForgeModelConfig:
     
     # ── Misc ──────────────────────────────────────────────────────────────────
     dropout: float = 0.0               # 0.0 during pretraining
-    tie_word_embeddings: bool = True
+    tie_word_embeddings: bool = False
     use_cache: bool = True             # KV cache for inference
     pad_token_id: int = 0
     bos_token_id: int = 1

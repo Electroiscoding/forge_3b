@@ -49,7 +49,7 @@
   "init_std_residual_scale":   true,
 
   "dropout":             0.0,
-  "tie_word_embeddings": true,
+  "tie_word_embeddings": false,
   "use_cache":           true,
   "pad_token_id":        0,
   "bos_token_id":        1,

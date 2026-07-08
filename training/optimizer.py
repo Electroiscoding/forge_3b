@@ -37,9 +37,10 @@ def build_optimizer(
     """
     
     is_zero3 = any(hasattr(p, "ds_id") for p in model.parameters())
+    tie_word_embeddings = getattr(model.config, "tie_word_embeddings", False)
     
-    if is_zero3:
-        logger.info("DeepSpeed ZeRO-3 detected — consolidating parameters into a single optimizer group to prevent duplicate bucket assertion crashes.")
+    if is_zero3 and tie_word_embeddings:
+        logger.info("DeepSpeed ZeRO-3 with weight tying detected — consolidating parameters into a single optimizer group to prevent duplicate bucket assertion crashes.")
         trainable_params = [p for p in model.parameters() if p.requires_grad]
         param_groups = [
             {
