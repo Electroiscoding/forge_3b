@@ -15,10 +15,11 @@ import math
 import torch
 import torch.nn.functional as F
 
+import os
 try:
     import triton
     import triton.language as tl
-    TRITON_AVAILABLE = True
+    TRITON_AVAILABLE = os.environ.get("FORGE_NO_TRITON") != "1"
 except ImportError:
     TRITON_AVAILABLE = False
     import warnings
