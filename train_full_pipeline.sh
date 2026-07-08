@@ -56,6 +56,9 @@ export HSA_FORCE_FINE_GRAIN_PCIE=1
 export NCCL_NET_GDR_LEVEL=0
 export NCCL_CROSS_NIC=0
 export NCCL_DEBUG=INFO
+export CUDA_LAUNCH_BLOCKING=1
+export HIP_LAUNCH_BLOCKING=1
+export TORCH_NCCL_BLOCKING_WAIT=1
 
 # ── Defaults ─────────────────────────────────────────────────────────────────
 WORKSPACE="/workspace"
