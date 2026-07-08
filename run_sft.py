@@ -186,8 +186,26 @@ def main():
     logger.info("Building FORGE-3B model...")
     from model.forge_model import build_forge_3b
 
-    model = build_forge_3b(model_config)
-    model = model.to(device)
+    # Detect if ZeRO Stage 3 is enabled to use deepspeed.zero.Init() context manager (required for tied weights)
+    is_zero3 = False
+    if args.deepspeed_config:
+        try:
+            with open(args.deepspeed_config) as f:
+                import json as _json
+                ds_config = _json.load(f)
+            if ds_config.get("zero_optimization", {}).get("stage", 0) == 3:
+                is_zero3 = True
+        except Exception as e:
+            logger.warning(f"Failed to check DeepSpeed config stage: {e}")
+
+    if is_zero3:
+        import deepspeed
+        logger.info("ZeRO-3 detected — wrapping model initialization in deepspeed.zero.Init()")
+        with deepspeed.zero.Init(config_dict_or_path=args.deepspeed_config):
+            model = build_forge_3b(model_config)
+    else:
+        model = build_forge_3b(model_config)
+        model = model.to(device)
 
     # Load pretrained weights
     logger.info(f"Loading pretrained weights from {args.base_model}...")
@@ -200,7 +218,13 @@ def main():
                 k: v.to(torch.bfloat16 if args.bf16 else torch.float32)
                 for k, v in state_dict.items()
             }
-            missing, unexpected = model.load_state_dict(state_dict, strict=False)
+            if is_zero3:
+                from deepspeed.zero import GatheredParameters
+                with GatheredParameters(list(model.parameters()), modifier_rank=0):
+                    missing, unexpected = model.load_state_dict(state_dict, strict=False)
+            else:
+                missing, unexpected = model.load_state_dict(state_dict, strict=False)
+                
             if missing:
                 logger.warning(f"Missing keys ({len(missing)}): {missing[:5]}...")
             if unexpected:
@@ -221,10 +245,15 @@ def main():
         sft_ckpt = resume_path / "model.pt"
         if sft_ckpt.exists():
             sd = torch.load(str(sft_ckpt), map_location="cpu")
-            model.load_state_dict(sd, strict=False)
+            if is_zero3:
+                from deepspeed.zero import GatheredParameters
+                with GatheredParameters(list(model.parameters()), modifier_rank=0):
+                    model.load_state_dict(sd, strict=False)
+            else:
+                model.load_state_dict(sd, strict=False)
             logger.info(f"SFT resume weights loaded from {sft_ckpt}")
 
-    n_params = sum(p.numel() for p in model.parameters())
+    n_params = sum(p.ds_numel if hasattr(p, "ds_numel") else p.numel() for p in model.parameters())
     logger.info(f"Model: {n_params / 1e9:.3f}B parameters")
 
     # Gradient checkpointing during SFT (critical — seq=4096 is memory-hungry)

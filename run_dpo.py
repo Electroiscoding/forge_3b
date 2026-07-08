@@ -99,10 +99,8 @@ def _setup_distributed():
 
     device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
     return rank, world_size, local_rank, device
-
-
 # ── Weight loading helper ─────────────────────────────────────────────────────
-def _load_model_weights(model, base_path: Path, bf16: bool, logger):
+def _load_model_weights(model, base_path: Path, bf16: bool, logger, is_zero3: bool = False):
     """Try multiple checkpoint filename conventions, load with strict=False."""
     for filename in ("model_bf16.pt", "model.pt", "pytorch_model.bin"):
         weight_path = base_path / filename
@@ -110,7 +108,14 @@ def _load_model_weights(model, base_path: Path, bf16: bool, logger):
             state_dict = torch.load(str(weight_path), map_location="cpu")
             if bf16:
                 state_dict = {k: v.to(torch.bfloat16) for k, v in state_dict.items()}
-            missing, unexpected = model.load_state_dict(state_dict, strict=False)
+            
+            if is_zero3:
+                from deepspeed.zero import GatheredParameters
+                with GatheredParameters(list(model.parameters()), modifier_rank=0):
+                    missing, unexpected = model.load_state_dict(state_dict, strict=False)
+            else:
+                missing, unexpected = model.load_state_dict(state_dict, strict=False)
+
             if missing:
                 logger.warning(f"Missing keys ({len(missing)}): {missing[:5]}...")
             if unexpected:
@@ -197,36 +202,64 @@ def main():
 
     model_config.vocab_size = tokenizer.vocab_size
 
+    # Detect if ZeRO Stage 3 is enabled to use deepspeed.zero.Init() context manager (required for tied weights)
+    is_zero3 = False
+    if args.deepspeed_config:
+        try:
+            with open(args.deepspeed_config) as f:
+                import json as _json
+                ds_config = _json.load(f)
+            if ds_config.get("zero_optimization", {}).get("stage", 0) == 3:
+                is_zero3 = True
+        except Exception as e:
+            logger.warning(f"Failed to check DeepSpeed config stage: {e}")
+
     # ── Policy Model ──────────────────────────────────────────────────────────
     logger.info("Building FORGE-3B policy model...")
     from model.forge_model import build_forge_3b
 
-    policy_model = build_forge_3b(model_config)
-    policy_model = policy_model.to(device)
-    _load_model_weights(policy_model, Path(args.base_model), args.bf16, logger)
+    if is_zero3:
+        import deepspeed
+        logger.info("ZeRO-3 detected — wrapping policy model initialization in deepspeed.zero.Init()")
+        with deepspeed.zero.Init(config_dict_or_path=args.deepspeed_config):
+            policy_model = build_forge_3b(model_config)
+    else:
+        policy_model = build_forge_3b(model_config)
+        policy_model = policy_model.to(device)
+    _load_model_weights(policy_model, Path(args.base_model), args.bf16, logger, is_zero3=is_zero3)
 
     # Resume from a prior DPO checkpoint if requested
     if args.resume_from:
         resume_path = Path(args.resume_from) / "model.pt"
         if resume_path.exists():
             sd = torch.load(str(resume_path), map_location="cpu")
-            policy_model.load_state_dict(sd, strict=False)
+            if is_zero3:
+                from deepspeed.zero import GatheredParameters
+                with GatheredParameters(list(policy_model.parameters()), modifier_rank=0):
+                    policy_model.load_state_dict(sd, strict=False)
+            else:
+                policy_model.load_state_dict(sd, strict=False)
             logger.info(f"DPO resume weights loaded from {resume_path}")
 
     # ── Reference Model (frozen copy of the SFT model) ────────────────────────
     # The reference model is kept in BF16 and set to eval() — never backpropagated.
     # On 16× H100 this fits fine alongside the policy with ZeRO-3 on the policy.
     logger.info("Building frozen reference model...")
-    ref_model = build_forge_3b(model_config)
-    ref_model = ref_model.to(device)
-    _load_model_weights(ref_model, Path(args.base_model), args.bf16, logger)
+    if is_zero3:
+        logger.info("ZeRO-3 detected — wrapping reference model initialization in deepspeed.zero.Init()")
+        with deepspeed.zero.Init(config_dict_or_path=args.deepspeed_config):
+            ref_model = build_forge_3b(model_config)
+    else:
+        ref_model = build_forge_3b(model_config)
+        ref_model = ref_model.to(device)
+    _load_model_weights(ref_model, Path(args.base_model), args.bf16, logger, is_zero3=is_zero3)
 
     # Hard-freeze the reference model — zero optimizer memory
     for param in ref_model.parameters():
         param.requires_grad_(False)
     ref_model.eval()
 
-    n_policy_params = sum(p.numel() for p in policy_model.parameters())
+    n_policy_params = sum(p.ds_numel if hasattr(p, "ds_numel") else p.numel() for p in policy_model.parameters())
     logger.info(
         f"Policy: {n_policy_params / 1e9:.3f}B params | "
         f"Reference: frozen BF16"

@@ -149,11 +149,29 @@ def main():
     logger.info("Building FORGE-3B model...")
     from model.forge_model import build_forge_3b
 
-    model = build_forge_3b(model_config)
-    model = model.to(device)
+    # Detect if ZeRO Stage 3 is enabled to use deepspeed.zero.Init() context manager (required for tied weights)
+    is_zero3 = False
+    if args.deepspeed_config:
+        try:
+            with open(args.deepspeed_config) as f:
+                import json as _json
+                ds_config = _json.load(f)
+            if ds_config.get("zero_optimization", {}).get("stage", 0) == 3:
+                is_zero3 = True
+        except Exception as e:
+            logger.warning(f"Failed to check DeepSpeed config stage: {e}")
 
-    n_params_total = sum(p.numel() for p in model.parameters())
-    n_params_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    if is_zero3:
+        import deepspeed
+        logger.info("ZeRO-3 detected — wrapping model initialization in deepspeed.zero.Init()")
+        with deepspeed.zero.Init(config_dict_or_path=args.deepspeed_config):
+            model = build_forge_3b(model_config)
+    else:
+        model = build_forge_3b(model_config)
+        model = model.to(device)
+
+    n_params_total = sum(p.ds_numel if hasattr(p, "ds_numel") else p.numel() for p in model.parameters())
+    n_params_trainable = sum(p.ds_numel if hasattr(p, "ds_numel") else p.numel() for p in model.parameters() if p.requires_grad)
     if is_main:
         logger.info(f"Model: {n_params_total / 1e9:.3f}B total params, "
                     f"{n_params_trainable / 1e9:.3f}B trainable")
@@ -188,7 +206,13 @@ def main():
 
         if ckpt_model_path.exists():
             state_dict = torch.load(str(ckpt_model_path), map_location="cpu")
-            missing, unexpected = model.load_state_dict(state_dict, strict=False)
+            if is_zero3:
+                from deepspeed.zero import GatheredParameters
+                with GatheredParameters(list(model.parameters()), modifier_rank=0):
+                    missing, unexpected = model.load_state_dict(state_dict, strict=False)
+            else:
+                missing, unexpected = model.load_state_dict(state_dict, strict=False)
+                
             if missing:
                 logger.warning(f"Missing keys in checkpoint ({len(missing)}): {missing[:5]}...")
             if unexpected:
