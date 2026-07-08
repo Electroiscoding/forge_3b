@@ -66,8 +66,8 @@ def build_optimizer(
              any(norm_name in name for norm_name in ["norm", "dgn"]):
             no_decay_params.append(param)
         
-        # 1D parameters (biases) — no weight decay
-        elif param.ndim <= 1:
+        # Biases or 1D parameters (no weight decay)
+        elif name.endswith(".bias") or (hasattr(param, "ds_shape") and len(param.ds_shape) <= 1) or (not hasattr(param, "ds_shape") and param.ndim <= 1):
             no_decay_params.append(param)
         
         # Everything else — weight decay

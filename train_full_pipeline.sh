@@ -54,6 +54,7 @@ HF_TOKEN=""
 SKIP_PRETRAIN=0
 SKIP_SFT=0
 NO_COMPILE=""
+NO_GC=""
 
 # ── Parse args ───────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -71,6 +72,7 @@ while [[ $# -gt 0 ]]; do
     --skip_pretrain)   SKIP_PRETRAIN=1;      shift ;;
     --skip_sft)        SKIP_SFT=1;           shift ;;
     --no_compile)      NO_COMPILE="--no_compile"; shift ;;
+    --no_gradient_checkpointing) NO_GC="--no_gradient_checkpointing"; shift ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
@@ -138,6 +140,7 @@ else
     --wandb_project     "${WANDB_PROJECT}_pretrain" \
     --deepspeed_config  "$DS_CFG" \
     $NO_COMPILE \
+    $NO_GC \
     2>&1 | tee "$LOGS_DIR/pretrain.log"
 
   PRETRAIN_FINAL="$PRETRAIN_OUT/final"
@@ -170,6 +173,7 @@ else
     --wandb_project "${WANDB_PROJECT}_sft" \
     --deepspeed_config "$DS_CFG" \
     $NO_COMPILE \
+    $NO_GC \
     2>&1 | tee "$LOGS_DIR/sft.log"
 
   SFT_FINAL="$SFT_OUT/final"
@@ -194,6 +198,7 @@ $DS_LAUNCH "$SCRIPT_DIR/run_dpo.py" \
   --wandb_project "${WANDB_PROJECT}_dpo" \
   --deepspeed_config "$DS_CFG" \
   $NO_COMPILE \
+  $NO_GC \
   2>&1 | tee "$LOGS_DIR/dpo.log"
 
 DPO_FINAL="$DPO_OUT/final"

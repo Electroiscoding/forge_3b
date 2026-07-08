@@ -62,6 +62,7 @@ def parse_args():
     parser.add_argument("--bf16", action="store_true", default=True)
     parser.add_argument("--no_compile", action="store_true")
     parser.add_argument("--deepspeed_config", type=str, default="./configs/ds_zero3.json")
+    parser.add_argument("--no_gradient_checkpointing", action="store_true")
     
     # Logging
     parser.add_argument("--wandb_project", type=str, default="forge_3b_pretrain")
@@ -103,6 +104,9 @@ def main():
         model_config = ForgeModelConfig.from_json(args.model_config)
     else:
         model_config = ForgeModelConfig()
+    
+    if args.no_gradient_checkpointing:
+        model_config.use_gradient_checkpointing = False
     
     train_config = PretrainConfig(
         output_dir=args.output_dir,

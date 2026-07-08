@@ -76,6 +76,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--deepspeed_config", default="./configs/ds_zero3_sft.json")
     p.add_argument("--no_compile",       action="store_true")
     p.add_argument("--bf16",             action="store_true", default=True)
+    p.add_argument("--no_gradient_checkpointing", action="store_true")
     p.add_argument("--save_every_steps", type=int, default=200)
     p.add_argument("--seed",             type=int, default=42)
 
@@ -142,6 +143,9 @@ def main():
         logger.warning(
             f"model_config.json not found at {model_config_path} — using defaults"
         )
+    
+    if args.no_gradient_checkpointing:
+        model_config.use_gradient_checkpointing = False
 
     sft_config = SFTConfig(
         base_model_path=args.base_model,
