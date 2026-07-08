@@ -47,18 +47,18 @@ elif [[ -f "/workspace/venv/bin/activate" ]]; then
   source /workspace/venv/bin/activate
 fi
 
-# ── Disable P2P and IB to prevent single-GPU RCCL deadlocks ───────────────────
-export NCCL_P2P_DISABLE=1
-export NCCL_IB_DISABLE=1
-export RCCL_P2P_DISABLE=1
-export RCCL_IB_DISABLE=1
-export HSA_FORCE_FINE_GRAIN_PCIE=1
-export NCCL_NET_GDR_LEVEL=0
-export NCCL_CROSS_NIC=0
-export NCCL_DEBUG=INFO
-export CUDA_LAUNCH_BLOCKING=1
-export HIP_LAUNCH_BLOCKING=1
-export TORCH_NCCL_BLOCKING_WAIT=1
+# ── Disable P2P and IB to prevent single-GPU RCCL deadlocks (Commented out for NVIDIA CUDA) ──
+# export NCCL_P2P_DISABLE=1
+# export NCCL_IB_DISABLE=1
+# export RCCL_P2P_DISABLE=1
+# export RCCL_IB_DISABLE=1
+# export HSA_FORCE_FINE_GRAIN_PCIE=1
+# export NCCL_NET_GDR_LEVEL=0
+# export NCCL_CROSS_NIC=0
+# export NCCL_DEBUG=INFO
+# export CUDA_LAUNCH_BLOCKING=1
+# export HIP_LAUNCH_BLOCKING=1
+# export TORCH_NCCL_BLOCKING_WAIT=1
 
 # ── Defaults ─────────────────────────────────────────────────────────────────
 WORKSPACE="/workspace"
