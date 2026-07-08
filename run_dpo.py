@@ -204,6 +204,7 @@ def main():
 
     # Detect if ZeRO Stage 3 is enabled to use deepspeed.zero.Init() context manager (required for tied weights)
     is_zero3 = False
+    ds_config = None
     if args.deepspeed_config:
         try:
             with open(args.deepspeed_config) as f:
@@ -211,6 +212,12 @@ def main():
                 ds_config = _json.load(f)
             if ds_config.get("zero_optimization", {}).get("stage", 0) == 3:
                 is_zero3 = True
+                # Patch gradient_accumulation_steps and micro_batch in ds_config if they are "auto"
+                if ds_config.get("gradient_accumulation_steps") == "auto":
+                    ds_config["gradient_accumulation_steps"] = dpo_config.gradient_accumulation_steps
+                if ds_config.get("train_micro_batch_size_per_gpu") == "auto":
+                    # For DPO, batch_pairs is equivalent to micro_batch per GPU
+                    ds_config["train_micro_batch_size_per_gpu"] = dpo_config.batch_size_pairs
         except Exception as e:
             logger.warning(f"Failed to check DeepSpeed config stage: {e}")
 
@@ -218,10 +225,10 @@ def main():
     logger.info("Building FORGE-3B policy model...")
     from model.forge_model import build_forge_3b
 
-    if is_zero3:
+    if is_zero3 and ds_config is not None:
         import deepspeed
         logger.info("ZeRO-3 detected — wrapping policy model initialization in deepspeed.zero.Init()")
-        with deepspeed.zero.Init(config_dict_or_path=args.deepspeed_config):
+        with deepspeed.zero.Init(config_dict_or_path=ds_config):
             policy_model = build_forge_3b(model_config)
     else:
         policy_model = build_forge_3b(model_config)
@@ -245,9 +252,9 @@ def main():
     # The reference model is kept in BF16 and set to eval() — never backpropagated.
     # On 16× H100 this fits fine alongside the policy with ZeRO-3 on the policy.
     logger.info("Building frozen reference model...")
-    if is_zero3:
+    if is_zero3 and ds_config is not None:
         logger.info("ZeRO-3 detected — wrapping reference model initialization in deepspeed.zero.Init()")
-        with deepspeed.zero.Init(config_dict_or_path=args.deepspeed_config):
+        with deepspeed.zero.Init(config_dict_or_path=ds_config):
             ref_model = build_forge_3b(model_config)
     else:
         ref_model = build_forge_3b(model_config)
