@@ -40,6 +40,13 @@
 
 set -euo pipefail   # stop on any error
 
+# ── Activate Virtual Environment ──────────────────────────────────────────────
+if [[ -f "/opt/venv/bin/activate" ]]; then
+  source /opt/venv/bin/activate
+elif [[ -f "/workspace/venv/bin/activate" ]]; then
+  source /workspace/venv/bin/activate
+fi
+
 # ── Defaults ─────────────────────────────────────────────────────────────────
 WORKSPACE="/workspace"
 NUM_GPUS=""          # auto-detect below
