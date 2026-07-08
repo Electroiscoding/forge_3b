@@ -26,6 +26,103 @@ logger = logging.getLogger(__name__)
 
 from training.hub_uploader import upload_folder_async
 
+import numpy as np
+
+
+class PreTokenizedPreferenceDataset(Dataset):
+    """
+    DPO dataset for pre-tokenized preference data.
+    
+    Expected format (from Phase-Technologies/forge-3b-dpo-data):
+        JSONL where each line has:
+          - chosen_full_ids:    list[int] — BOS + prompt + chosen completion
+          - rejected_full_ids:  list[int] — BOS + prompt + rejected completion
+          - chosen_loss_mask:   list[int] — 1 = completion token, 0 = prompt/pad
+          - rejected_loss_mask: list[int] — same
+    
+    Falls back to prompt_ids + chosen_ids + rejected_ids if full_ids not present.
+    """
+    
+    def __init__(
+        self,
+        data_path: str,
+        seq_len: int = 4096,
+    ):
+        self.seq_len = seq_len
+        
+        self.samples = []
+        with open(data_path) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    self.samples.append(json.loads(line))
+        
+        # Detect which fields are available
+        if self.samples:
+            s0 = self.samples[0]
+            self.has_full_ids = "chosen_full_ids" in s0 and "rejected_full_ids" in s0
+            self.has_loss_mask = "chosen_loss_mask" in s0 and "rejected_loss_mask" in s0
+            self.has_separate_ids = "prompt_ids" in s0 and "chosen_ids" in s0
+        
+        logger.info(
+            f"PreTokenizedPreferenceDataset: {len(self.samples):,} pairs | "
+            f"full_ids={self.has_full_ids} | loss_mask={self.has_loss_mask}"
+        )
+    
+    def __len__(self) -> int:
+        return len(self.samples)
+    
+    def _pad_and_truncate(self, ids: list, pad_val: int = 0) -> torch.Tensor:
+        """Truncate to seq_len and pad with pad_val."""
+        ids = ids[:self.seq_len]
+        ids = ids + [pad_val] * (self.seq_len - len(ids))
+        return torch.tensor(ids, dtype=torch.long)
+    
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        item = self.samples[idx]
+        
+        if self.has_full_ids:
+            # Full pre-tokenized sequences (BOS + prompt + completion)
+            chosen_ids = item["chosen_full_ids"]
+            rejected_ids = item["rejected_full_ids"]
+        elif self.has_separate_ids:
+            # Separate prompt + completion IDs — concatenate with BOS
+            prompt = item["prompt_ids"]
+            chosen_ids = [1] + prompt + item["chosen_ids"]    # BOS=1
+            rejected_ids = [1] + prompt + item["rejected_ids"]
+        else:
+            raise ValueError(f"DPO sample {idx} has neither chosen_full_ids nor prompt_ids")
+        
+        # Build labels from loss mask (or infer from prompt length)
+        if self.has_loss_mask:
+            chosen_mask = item["chosen_loss_mask"]
+            rejected_mask = item["rejected_loss_mask"]
+        else:
+            # Infer: prompt portion = 0, completion portion = 1
+            prompt_len = len(item.get("prompt_ids", [])) + 1  # +1 for BOS
+            chosen_mask = [0] * prompt_len + [1] * (len(chosen_ids) - prompt_len)
+            rejected_mask = [0] * prompt_len + [1] * (len(rejected_ids) - prompt_len)
+        
+        # Convert to tensors with padding
+        chosen_input = self._pad_and_truncate(chosen_ids, pad_val=0)
+        rejected_input = self._pad_and_truncate(rejected_ids, pad_val=0)
+        
+        # Labels: token id where mask=1, -100 where mask=0 or padding
+        chosen_labels = chosen_input.clone()
+        chosen_mask_t = self._pad_and_truncate(chosen_mask, pad_val=0)
+        chosen_labels[chosen_mask_t == 0] = -100
+        
+        rejected_labels = rejected_input.clone()
+        rejected_mask_t = self._pad_and_truncate(rejected_mask, pad_val=0)
+        rejected_labels[rejected_mask_t == 0] = -100
+        
+        return {
+            "chosen_input_ids": chosen_input,
+            "chosen_labels": chosen_labels,
+            "rejected_input_ids": rejected_input,
+            "rejected_labels": rejected_labels,
+        }
+
 
 class PreferenceDataset(Dataset):
     """

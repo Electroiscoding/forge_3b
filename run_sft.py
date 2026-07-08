@@ -234,25 +234,41 @@ def main():
 
     # ── Dataset ───────────────────────────────────────────────────────────────
     logger.info("Loading SFT dataset...")
-    from training.sft_engine import SFTDataset
     from data.dataset import build_dataloader
 
-    train_jsonl = str(Path(args.data_dir) / "train.jsonl")
-    if not Path(train_jsonl).exists():
-        raise FileNotFoundError(
-            f"SFT training file not found: {train_jsonl}\n"
-            "Expected JSONL with 'messages' field (list of role/content dicts)."
+    # Auto-detect format: pre-tokenized .npz shards vs raw JSONL
+    npz_files = list(Path(args.data_dir).glob("**/*.npz"))
+    train_jsonl = Path(args.data_dir) / "train.jsonl"
+
+    if npz_files:
+        # Pre-tokenized format (from Phase-Technologies/forge-3b-sft-data)
+        logger.info(f"Found {len(npz_files)} .npz shards — using PackedSFTDataset")
+        from training.sft_engine import PackedSFTDataset
+
+        train_dataset = PackedSFTDataset(
+            data_dir=args.data_dir,
+            seq_len=args.seq_len,
+            seed=args.seed,
         )
+    elif train_jsonl.exists():
+        # Raw JSONL format — tokenize on-the-fly
+        logger.info("Found train.jsonl — using SFTDataset (live tokenization)")
+        from training.sft_engine import SFTDataset
 
-    train_dataset = SFTDataset(
-        data_path=train_jsonl,
-        tokenizer=tokenizer,
-        seq_len=args.seq_len,
-        loss_on_prompt=args.loss_on_prompt,
-        pack_sequences=args.pack_sequences,
-    )
-
-    from tokenizer.data_collator import SFTCollator
+        train_dataset = SFTDataset(
+            data_path=str(train_jsonl),
+            tokenizer=tokenizer,
+            seq_len=args.seq_len,
+            loss_on_prompt=args.loss_on_prompt,
+            pack_sequences=args.pack_sequences,
+        )
+    else:
+        raise FileNotFoundError(
+            f"No SFT data found in {args.data_dir}.\n"
+            "Expected either:\n"
+            "  - .npz shards with input_ids + loss_mask (pre-tokenized)\n"
+            "  - train.jsonl with 'messages' field (raw text)"
+        )
 
     train_loader = build_dataloader(
         dataset=train_dataset,

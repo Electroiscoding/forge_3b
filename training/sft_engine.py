@@ -27,6 +27,89 @@ logger = logging.getLogger(__name__)
 
 from training.hub_uploader import upload_folder_async
 
+import numpy as np
+
+
+class PackedSFTDataset(Dataset):
+    """
+    Dataset for pre-tokenized SFT data stored as .npz shards.
+    
+    Expected format (from Phase-Technologies/forge-3b-sft-data):
+        Each .npz file contains:
+          - input_ids:  (N, seq_len) uint32  — tokenized sequences
+          - loss_mask:  (N, seq_len) uint8   — 1 = compute loss, 0 = ignore
+    
+    Converts loss_mask to labels: where mask=1 → token id, where mask=0 → -100.
+    """
+    
+    def __init__(
+        self,
+        data_dir: str,
+        seq_len: int = 4096,
+        max_samples: Optional[int] = None,
+        seed: int = 42,
+    ):
+        self.seq_len = seq_len
+        data_path = Path(data_dir)
+        
+        # Find all .npz shard files recursively
+        npz_files = sorted(data_path.glob("**/*.npz"))
+        if not npz_files:
+            raise FileNotFoundError(f"No .npz files found in {data_dir}")
+        
+        # Load all shards (memory-mapped where possible)
+        all_ids = []
+        all_masks = []
+        for f in npz_files:
+            try:
+                data = np.load(str(f))
+                ids = data["input_ids"]    # (N, seq_len) uint32
+                mask = data["loss_mask"]   # (N, seq_len) uint8
+                
+                if ids.shape[1] != seq_len:
+                    logger.warning(f"Shard {f} has seq_len={ids.shape[1]}, expected {seq_len}. Skipping.")
+                    continue
+                
+                all_ids.append(ids)
+                all_masks.append(mask)
+                logger.info(f"  Loaded SFT shard {f.name}: {len(ids):,} samples")
+            except Exception as e:
+                logger.warning(f"Failed to load {f}: {e}")
+        
+        if not all_ids:
+            raise RuntimeError(f"No valid .npz shards loaded from {data_dir}")
+        
+        self.input_ids = np.concatenate(all_ids, axis=0)    # (total_N, seq_len)
+        self.loss_mask = np.concatenate(all_masks, axis=0)   # (total_N, seq_len)
+        
+        if max_samples and max_samples < len(self.input_ids):
+            rng = np.random.default_rng(seed)
+            indices = rng.choice(len(self.input_ids), max_samples, replace=False)
+            self.input_ids = self.input_ids[indices]
+            self.loss_mask = self.loss_mask[indices]
+        
+        logger.info(
+            f"PackedSFTDataset: {len(self.input_ids):,} samples × {seq_len} tokens, "
+            f"loss coverage: {self.loss_mask.mean():.1%}"
+        )
+    
+    def __len__(self) -> int:
+        return len(self.input_ids)
+    
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        ids = self.input_ids[idx].astype(np.int64)
+        mask = self.loss_mask[idx]
+        
+        input_ids = torch.from_numpy(ids)
+        # Labels: token id where mask=1, -100 where mask=0
+        labels = input_ids.clone()
+        labels[mask == 0] = -100
+        
+        return {
+            "input_ids": input_ids,
+            "labels": labels,
+        }
+
 
 class SFTDataset(Dataset):
     """

@@ -186,17 +186,10 @@ if [[ -z "$DPO_DATA" ]]; then
   exit 1
 fi
 
-# DPO expects a single merged JSONL — merge all source jsonl files if needed
-DPO_MERGED="$WORKSPACE/data/dpo_merged.jsonl"
-if [[ ! -f "$DPO_MERGED" ]]; then
-  echo "  Merging DPO jsonl files from $DPO_DATA → $DPO_MERGED"
-  find "$DPO_DATA" -name "*.jsonl" | sort | xargs cat > "$DPO_MERGED"
-  echo "  Merged $(wc -l < "$DPO_MERGED") preference pairs"
-fi
-
+# run_dpo.py now accepts a directory and auto-merges JSONL files internally
 $DS_LAUNCH "$SCRIPT_DIR/run_dpo.py" \
   --base_model    "$SFT_FINAL" \
-  --data_path     "$DPO_MERGED" \
+  --data_path     "$DPO_DATA" \
   --output_dir    "$DPO_OUT" \
   --wandb_project "${WANDB_PROJECT}_dpo" \
   --deepspeed_config "$DS_CFG" \

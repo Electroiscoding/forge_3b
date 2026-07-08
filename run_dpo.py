@@ -237,23 +237,57 @@ def main():
         logger.info("Gradient checkpointing enabled on policy")
 
     # ── Dataset ───────────────────────────────────────────────────────────────
-    if not Path(args.data_path).exists():
-        raise FileNotFoundError(
-            f"DPO preference data not found: {args.data_path}\n"
-            "Expected JSONL with fields: prompt (list) | chosen (str/list) | rejected (str/list)"
+    data_path = Path(args.data_path)
+    
+    # If data_path is a directory, merge all .jsonl files into one
+    if data_path.is_dir():
+        merged_path = data_path / "_merged_dpo.jsonl"
+        if not merged_path.exists():
+            logger.info(f"Merging DPO JSONL files from {data_path}...")
+            jsonl_files = sorted(data_path.glob("**/*.jsonl"))
+            if not jsonl_files:
+                raise FileNotFoundError(f"No .jsonl files found in {data_path}")
+            with open(merged_path, "w") as out:
+                for jf in jsonl_files:
+                    with open(jf) as inp:
+                        for line in inp:
+                            if line.strip():
+                                out.write(line if line.endswith("\n") else line + "\n")
+            logger.info(f"Merged {len(jsonl_files)} files → {merged_path}")
+        actual_data_path = str(merged_path)
+    else:
+        if not data_path.exists():
+            raise FileNotFoundError(
+                f"DPO data not found: {data_path}\n"
+                "Pass a .jsonl file or a directory containing .jsonl files."
+            )
+        actual_data_path = str(data_path)
+    
+    # Sniff the first line to detect format
+    with open(actual_data_path) as f:
+        first_line = f.readline().strip()
+    first_item = json.loads(first_line)
+    is_pretokenized = ("prompt_ids" in first_item or "chosen_full_ids" in first_item)
+    
+    if is_pretokenized:
+        logger.info("Detected pre-tokenized DPO data — using PreTokenizedPreferenceDataset")
+        from training.dpo_engine import PreTokenizedPreferenceDataset
+        dataset = PreTokenizedPreferenceDataset(
+            data_path=actual_data_path,
+            seq_len=args.seq_len,
         )
-
-    from training.dpo_engine import PreferenceDataset
-    from torch.utils.data import DataLoader
-
-    dataset = PreferenceDataset(
-        data_path=args.data_path,
-        tokenizer=tokenizer,
-        seq_len=args.seq_len,
-    )
+    else:
+        logger.info("Detected raw text DPO data — using PreferenceDataset (live tokenization)")
+        from training.dpo_engine import PreferenceDataset
+        dataset = PreferenceDataset(
+            data_path=actual_data_path,
+            tokenizer=tokenizer,
+            seq_len=args.seq_len,
+        )
     logger.info(f"Preference dataset: {len(dataset):,} pairs")
 
     from tokenizer.data_collator import DPOCollator
+    from torch.utils.data import DataLoader
 
     dataloader = DataLoader(
         dataset,
