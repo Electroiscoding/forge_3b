@@ -16,13 +16,7 @@
     "load_from_fp32_weights": true
   },
   "bf16": {
-    "enabled": true,
-    "loss_scale": 0,
-    "loss_scale_window": 1000,
-    "initial_scale_power": 16,
-    "hysteresis": 2,
-    "consecutive_hysteresis": false,
-    "min_loss_scale": 1
+    "enabled": true
   },
   "gradient_clipping": 1.0,
   "train_micro_batch_size_per_gpu": 2,
