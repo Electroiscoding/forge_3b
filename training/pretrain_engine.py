@@ -261,6 +261,8 @@ class PretrainEngine:
         data_iter = iter(dataloader)
         
         while tokens_this_phase < target_tokens:
+            if self.is_main:
+                logger.info(f"Starting global step {self._global_step + 1} (accumulating {gradient_accumulation_steps} micro-batches)...")
             optimizer.zero_grad(set_to_none=True)  # more efficient than .zero_grad()
             
             step_loss = 0.0

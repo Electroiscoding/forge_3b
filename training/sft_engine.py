@@ -257,6 +257,8 @@ class SFTEngine:
         data_iter = iter(train_dataloader)
         
         while tokens_processed < target_tokens:
+            if self.is_main:
+                logger.info(f"Starting SFT Step {self._global_step + 1} (accumulating {ga_steps} micro-batches)...")
             optimizer.zero_grad(set_to_none=True)
             
             accum_loss = 0.0

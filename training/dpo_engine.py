@@ -327,6 +327,8 @@ class DPOEngine:
         
         for epoch in range(self.config.n_epochs):
             for batch in dataloader:
+                if self.is_main and self._global_step == 0:
+                    logger.info("DPO Training starting on GPU. Running preference optimization...")
                 
                 chosen_input = batch["chosen_input_ids"].to(self.device, non_blocking=True)
                 chosen_labels = batch["chosen_labels"].to(self.device, non_blocking=True)
