@@ -242,9 +242,9 @@ class FusedDGN(torch.autograd.Function):
         
         # Backward via PyTorch autograd (exact, Triton bwd TBD)
         with torch.enable_grad():
-            x_r = x.requires_grad_(True)
-            w_r = weight.requires_grad_(True)
-            b_r = bias.requires_grad_(True)
+            x_r = x.detach().requires_grad_(True)
+            w_r = weight.detach().requires_grad_(True)
+            b_r = bias.detach().requires_grad_(True)
             y = _dgn_pytorch(x_r, w_r, b_r, G, Dg, eps)
             y.backward(grad_output.reshape_as(y))
         
