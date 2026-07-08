@@ -250,6 +250,9 @@ class PretrainEngine:
         model = model_engine if model_engine is not None else self.model
         model.train()
         
+        if hasattr(model, "set_gradient_accumulation_steps"):
+            model.set_gradient_accumulation_steps(gradient_accumulation_steps)
+        
         tokens_this_phase = 0
         step = 0
         accum_loss = 0.0
@@ -299,6 +302,7 @@ class PretrainEngine:
                 # Backward
                 if hasattr(model, "backward"):
                     model.backward(loss)  # DeepSpeed
+                    model.step()          # DeepSpeed handles accumulation and weight updates internally!
                 else:
                     loss.backward()
                 
@@ -309,8 +313,6 @@ class PretrainEngine:
             
             # Gradient clipping and optimizer step
             if hasattr(model, "step"):
-                # DeepSpeed handles clipping internally
-                model.step()
                 grad_norm = model.get_global_grad_norm() if hasattr(model, "get_global_grad_norm") else 0.0
             else:
                 grad_norm = clip_grad_norm_and_log(model.parameters(), self.config.grad_clip)
