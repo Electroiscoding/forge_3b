@@ -10,7 +10,7 @@
     "stage3_max_reuse_distance": 500000000,
     "stage3_gather_16bit_weights_on_model_save": true,
     "sub_group_size": 1000000000,
-    "reduce_scatter": true,
+    "reduce_scatter": false,
     "allgather_partitions": true,
     "allgather_bucket_size": 200000000,
     "load_from_fp32_weights": true

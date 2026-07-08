@@ -52,6 +52,10 @@ export NCCL_P2P_DISABLE=1
 export NCCL_IB_DISABLE=1
 export RCCL_P2P_DISABLE=1
 export RCCL_IB_DISABLE=1
+export HSA_FORCE_FINE_GRAIN_PCIE=1
+export NCCL_NET_GDR_LEVEL=0
+export NCCL_CROSS_NIC=0
+export NCCL_DEBUG=INFO
 
 # ── Defaults ─────────────────────────────────────────────────────────────────
 WORKSPACE="/workspace"
