@@ -140,7 +140,15 @@ class ARGLayer(nn.Module):
             torch.rand(self.d_inner) * (math.log(0.1) - math.log(0.001)) + math.log(0.001)
         )
         with torch.no_grad():
-            self.dt_proj.bias.copy_(dt_bias + torch.log(-torch.expm1(-dt_bias)))
+            if hasattr(self.dt_proj.bias, "ds_id"):
+                import deepspeed
+                with deepspeed.zero.GatheredParameters(self.dt_proj.bias, modifier_rank=0):
+                    import torch.distributed as dist
+                    rank = dist.get_rank() if dist.is_initialized() else 0
+                    if rank == 0:
+                        self.dt_proj.bias.copy_(dt_bias + torch.log(-torch.expm1(-dt_bias)))
+            else:
+                self.dt_proj.bias.copy_(dt_bias + torch.log(-torch.expm1(-dt_bias)))
         
         # nu initialized to log(1.0) = 0 → moderate decay
         nn.init.zeros_(self.nu)
