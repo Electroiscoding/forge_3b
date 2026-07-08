@@ -316,6 +316,7 @@ class ThroughputMeter:
         gpu_tflops = {
             "h100 sxm": 1979.0,
             "h100 pcie": 989.0,
+            "mi300": 653.7,
             "a100 sxm": 312.0,
             "a100 pcie": 312.0,
             "a40": 37.4,
@@ -331,7 +332,11 @@ class ThroughputMeter:
         
         # Estimate from SM count and clock
         sm_count = props.multi_processor_count
-        clock_ghz = props.max_clock_rate / 1e6
+        clock_rate = getattr(props, "max_clock_rate", None)
+        if clock_rate is not None:
+            clock_ghz = clock_rate / 1e6
+        else:
+            clock_ghz = 1.5  # standard fallback clock speed (1.5 GHz)
         estimated = sm_count * 128 * 2 * clock_ghz / 1e3  # rough estimate
         logger.warning(f"Unknown GPU {props.name} — estimating {estimated:.1f} TFLOPS")
         return estimated
