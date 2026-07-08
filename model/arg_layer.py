@@ -172,7 +172,7 @@ class ARGLayer(nn.Module):
     def _cpb_initial_state(self, B: int, position_offset: int, 
                              device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
         """Compute initial SSM state from absolute position offset."""
-        sinpe = self._sinusoidal_pe(position_offset, device)
+        sinpe = self._sinusoidal_pe(position_offset, device).to(dtype=self.cpb_proj.weight.dtype)
         h0 = torch.tanh(self.cpb_proj(sinpe))  # (d_state,)
         h0_real = h0.unsqueeze(0).expand(B, -1)  # (B, d_state)
         h0_imag = torch.zeros_like(h0_real)
