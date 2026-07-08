@@ -271,6 +271,8 @@ class PretrainEngine:
             self.throughput_meter.start_step()
             
             for accum_step in range(gradient_accumulation_steps):
+                if self.is_main and (accum_step % 100 == 0 or accum_step == gradient_accumulation_steps - 1):
+                    logger.info(f"  [Micro-step {accum_step}/{gradient_accumulation_steps}] Forward/backward pass...")
                 # Fetch batch
                 try:
                     batch = next(data_iter)

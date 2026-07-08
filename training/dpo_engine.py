@@ -330,6 +330,10 @@ class DPOEngine:
                 if self.is_main and self._global_step == 0:
                     logger.info("DPO Training starting on GPU. Running preference optimization...")
                 
+                accum_step = self._global_step % self.config.gradient_accumulation_steps
+                if self.is_main and (accum_step % 10 == 0 or accum_step == self.config.gradient_accumulation_steps - 1):
+                    logger.info(f"  [DPO Micro-step {accum_step}/{self.config.gradient_accumulation_steps}] Forward/backward pass...")
+                
                 chosen_input = batch["chosen_input_ids"].to(self.device, non_blocking=True)
                 chosen_labels = batch["chosen_labels"].to(self.device, non_blocking=True)
                 rejected_input = batch["rejected_input_ids"].to(self.device, non_blocking=True)

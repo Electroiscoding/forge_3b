@@ -264,6 +264,8 @@ class SFTEngine:
             accum_loss = 0.0
             
             for accum_step in range(ga_steps):
+                if self.is_main and (accum_step % 50 == 0 or accum_step == ga_steps - 1):
+                    logger.info(f"  [SFT Micro-step {accum_step}/{ga_steps}] Forward/backward pass...")
                 try:
                     batch = next(data_iter)
                 except StopIteration:
