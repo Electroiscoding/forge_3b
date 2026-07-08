@@ -279,10 +279,11 @@ class PretrainEngine:
                 
                 n_tokens = (labels != -100).sum().item()
                 
-                # Gradient sync only on last accumulation step (DDP efficiency)
+                # Gradient sync only on last accumulation step for DDP (DeepSpeed handles this internally)
+                is_deepspeed = hasattr(model, "backward")
                 sync_context = (
                     model.no_sync() 
-                    if hasattr(model, "no_sync") and accum_step < gradient_accumulation_steps - 1
+                    if hasattr(model, "no_sync") and not is_deepspeed and accum_step < gradient_accumulation_steps - 1
                     else contextlib.nullcontext()
                 )
                 
