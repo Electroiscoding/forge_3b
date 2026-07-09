@@ -384,24 +384,18 @@ class PretrainEngine:
         # ── Setup ─────────────────────────────────────────────────────────────
         warmup_gpu(self.device)
         
-        # DeepSpeed (must initialize offloading and ZeRO hooks on clean uncompiled model hierarchy)
-        self.model_engine, optimizer = self._setup_deepspeed(self.model, optimizer, lr_scheduler)
-        
-        # torch.compile (compile the inner model module after DeepSpeed wraps/registers parameters)
+        # torch.compile (compile individual inner block layers BEFORE DeepSpeed initialization
+        # so ZeRO post-accumulate-grad hooks attach to outer parameters and execute cleanly during backward pass)
         if self.config.torch_compile:
-            if hasattr(self.model_engine, "module"):
-                # Use object.__setattr__ to prevent nn.Module.__setattr__ from registering the
-                # compiled module as a sub-module under self._modules, keeping it in __dict__.
-                object.__setattr__(
-                    self.model_engine,
-                    "module",
-                    compile_model(
-                        self.model_engine.module,
+            logger.info("Compiling individual transformer layers before DeepSpeed initialization...")
+            if hasattr(self.model, "layers") and isinstance(self.model.layers, nn.ModuleList):
+                for i in range(len(self.model.layers)):
+                    self.model.layers[i] = compile_model(
+                        self.model.layers[i],
                         mode=self.config.compile_mode,
-                        fullgraph=False,  # False for MoE (dynamic dispatch)
-                        dynamic=True,     # Handle variable batch sizes
+                        fullgraph=False,
+                        dynamic=True,
                     )
-                )
             else:
                 self.model = compile_model(
                     self.model,
@@ -409,6 +403,9 @@ class PretrainEngine:
                     fullgraph=False,
                     dynamic=True,
                 )
+        
+        # DeepSpeed (initialize offloading and ZeRO hooks around the compiled/uncompiled hierarchy)
+        self.model_engine, optimizer = self._setup_deepspeed(self.model, optimizer, lr_scheduler)
         
         logger.info("=" * 70)
         logger.info("FORGE-3B PRETRAINING STARTED")
