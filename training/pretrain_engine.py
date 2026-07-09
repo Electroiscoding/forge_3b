@@ -34,6 +34,21 @@ logger = logging.getLogger(__name__)
 
 from training.hub_uploader import upload_folder_async
 
+class AttrDict(dict):
+    """Dictionary subclass that allows arbitrary attribute assignment (`._in_forward = True`)."""
+    pass
+
+if not getattr(nn.Module.__getattribute__, "_is_patched_getattribute", False):
+    _orig_getattribute = nn.Module.__getattribute__
+    def _patched_getattribute(self, name):
+        val = _orig_getattribute(self, name)
+        if type(val) is dict and name in ("_parameters", "_buffers", "_modules"):
+            val = AttrDict(val)
+            object.__setattr__(self, name, val)
+        return val
+    _patched_getattribute._is_patched_getattribute = True
+    nn.Module.__getattribute__ = _patched_getattribute
+
 
 class PretrainEngine:
     """
@@ -381,17 +396,25 @@ class PretrainEngine:
         # ── Setup ─────────────────────────────────────────────────────────────
         warmup_gpu(self.device)
         
-        # torch.compile
-        if self.config.torch_compile:
-            self.model = compile_model(
-                self.model,
-                mode=self.config.compile_mode,
-                fullgraph=False,  # False for MoE (dynamic dispatch)
-                dynamic=True,     # Handle variable batch sizes
-            )
-        
-        # DeepSpeed
+        # DeepSpeed (must initialize offloading and ZeRO hooks on clean uncompiled model hierarchy)
         self.model_engine, optimizer = self._setup_deepspeed(self.model, optimizer, lr_scheduler)
+        
+        # torch.compile (compile the inner model module after DeepSpeed wraps/registers parameters)
+        if self.config.torch_compile:
+            if hasattr(self.model_engine, "module"):
+                self.model_engine.module = compile_model(
+                    self.model_engine.module,
+                    mode=self.config.compile_mode,
+                    fullgraph=False,  # False for MoE (dynamic dispatch)
+                    dynamic=True,     # Handle variable batch sizes
+                )
+            else:
+                self.model = compile_model(
+                    self.model,
+                    mode=self.config.compile_mode,
+                    fullgraph=False,
+                    dynamic=True,
+                )
         
         logger.info("=" * 70)
         logger.info("FORGE-3B PRETRAINING STARTED")

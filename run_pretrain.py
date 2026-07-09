@@ -23,17 +23,20 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
-class AttributeDict(dict):
+class AttrDict(dict):
+    """Dictionary subclass that allows arbitrary attribute assignment (`._in_forward = True`)."""
     pass
 
-_original_init = nn.Module.__init__
-def _patched_init(self, *args, **kwargs):
-    _original_init(self, *args, **kwargs)
-    self._parameters = AttributeDict()
-    self._buffers = AttributeDict()
-    self._modules = AttributeDict()
-
-nn.Module.__init__ = _patched_init
+if not getattr(nn.Module.__getattribute__, "_is_patched_getattribute", False):
+    _orig_getattribute = nn.Module.__getattribute__
+    def _patched_getattribute(self, name):
+        val = _orig_getattribute(self, name)
+        if type(val) is dict and name in ("_parameters", "_buffers", "_modules"):
+            val = AttrDict(val)
+            object.__setattr__(self, name, val)
+        return val
+    _patched_getattribute._is_patched_getattribute = True
+    nn.Module.__getattribute__ = _patched_getattribute
 
 # ── Logging Setup ────────────────────────────────────────────────────────────
 logging.basicConfig(
