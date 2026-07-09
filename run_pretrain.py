@@ -21,6 +21,19 @@ import datetime
 from pathlib import Path
 
 import torch
+import torch.nn as nn
+
+class AttributeDict(dict):
+    pass
+
+_original_init = nn.Module.__init__
+def _patched_init(self, *args, **kwargs):
+    _original_init(self, *args, **kwargs)
+    self._parameters = AttributeDict()
+    self._buffers = AttributeDict()
+    self._modules = AttributeDict()
+
+nn.Module.__init__ = _patched_init
 
 # ── Logging Setup ────────────────────────────────────────────────────────────
 logging.basicConfig(
