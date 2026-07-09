@@ -89,3 +89,4 @@ In eager mode, `param.grad` is synchronously written by PyTorch autograd before 
 We are tracking this repository issue to gather feedback on:
 1. Whether DeepSpeed upstream (`microsoft/DeepSpeed`) plans to support `register_post_accumulate_grad_hook` compatibility with `AOTAutograd` functionalized backward buffers without requiring inner-block compilation.
 2. Best practices for synchronizing `Variable._execution_engine.run_backward` hook firing order when `torch.compile(model_engine.module)` wraps a ZeRO-2 `DeepSpeedEngine`.
+3. **Comprehensive Smoke Testing & Verification**: It would be highly beneficial if maintainers or community contributors could assist in fully debugging the codebase and establishing a robust end-to-end smoke test matrix verifying `torch.compile(mode="max-autotune")` + `DeepSpeed ZeRO-2/3` across single-GPU and multi-GPU distributed training environments.
