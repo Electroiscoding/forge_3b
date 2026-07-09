@@ -217,6 +217,11 @@ def main():
         model = build_forge_3b(model_config)
         model = model.to(device)
 
+    # Convert _parameters, _buffers, and _modules of all modules to AttrDict post-construction
+    # to support DeepSpeed setting dynamic attributes (e.g. _in_forward) on PyTorch 2.5+.
+    from training.gpu_optimizer import convert_to_attr_dict
+    convert_to_attr_dict(model)
+
     # Load pretrained weights
     logger.info(f"Loading pretrained weights from {args.base_model}...")
     for weight_filename in ("model_bf16.pt", "model.pt", "pytorch_model.bin"):

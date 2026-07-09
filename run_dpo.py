@@ -237,6 +237,10 @@ def main():
     else:
         policy_model = build_forge_3b(model_config)
         policy_model = policy_model.to(device)
+    # Convert _parameters, _buffers, and _modules of all modules to AttrDict post-construction
+    # to support DeepSpeed setting dynamic attributes (e.g. _in_forward) on PyTorch 2.5+.
+    from training.gpu_optimizer import convert_to_attr_dict
+    convert_to_attr_dict(policy_model)
     _load_model_weights(policy_model, Path(args.base_model), args.bf16, logger, is_zero3=is_zero3)
 
     # Resume from a prior DPO checkpoint if requested
@@ -263,6 +267,8 @@ def main():
     else:
         ref_model = build_forge_3b(model_config)
         ref_model = ref_model.to(device)
+    # Convert reference model attributes as well (both are nn.Modules)
+    convert_to_attr_dict(ref_model)
     _load_model_weights(ref_model, Path(args.base_model), args.bf16, logger, is_zero3=is_zero3)
 
     # Hard-freeze the reference model — zero optimizer memory

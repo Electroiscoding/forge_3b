@@ -23,29 +23,8 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
-class AttrDict(dict):
-    """Dictionary subclass that allows arbitrary attribute assignment (`._in_forward = True`)."""
-    pass
-
-def _make_prop(name):
-    def getter(self):
-        val = self.__dict__.get(name)
-        if type(val) is dict:
-            val = AttrDict(val)
-            self.__dict__[name] = val
-        return val
-    def setter(self, value):
-        if type(value) is dict:
-            value = AttrDict(value)
-        self.__dict__[name] = value
-    return property(getter, setter)
-
-if not isinstance(getattr(nn.Module, "_parameters", None), property):
-    nn.Module._parameters = _make_prop("_parameters")
-if not isinstance(getattr(nn.Module, "_buffers", None), property):
-    nn.Module._buffers = _make_prop("_buffers")
-if not isinstance(getattr(nn.Module, "_modules", None), property):
-    nn.Module._modules = _make_prop("_modules")
+# No global class patches on nn.Module (which break torch.compile).
+# Instead, we call convert_to_attr_dict(model) post-construction.
 
 # ── Logging Setup ────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -204,6 +183,12 @@ def main():
     else:
         model = build_forge_3b(model_config)
         model = model.to(device)
+
+    # Convert _parameters, _buffers, and _modules of all modules to AttrDict post-construction
+    # to support DeepSpeed setting dynamic attributes (e.g. _in_forward) on PyTorch 2.5+.
+    # This avoids setting class properties on nn.Module, which breaks torch.compile (Dynamo) tracing.
+    from training.gpu_optimizer import convert_to_attr_dict
+    convert_to_attr_dict(model)
 
     n_params_total = sum(p.ds_numel if hasattr(p, "ds_numel") else p.numel() for p in model.parameters())
     n_params_trainable = sum(p.ds_numel if hasattr(p, "ds_numel") else p.numel() for p in model.parameters() if p.requires_grad)

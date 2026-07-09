@@ -25,6 +25,26 @@ import torch.distributed as dist
 logger = logging.getLogger(__name__)
 
 
+class AttrDict(dict):
+    """Dictionary subclass that allows arbitrary attribute assignment (`._in_forward = True`)."""
+    pass
+
+
+def convert_to_attr_dict(model: nn.Module) -> None:
+    """
+    Recursively converts the _parameters, _buffers, and _modules dicts of all submodules
+    to AttrDict to support DeepSpeed dynamic attributes on PyTorch 2.5+ without
+    breaking torch.compile (Dynamo) tracing.
+    """
+    for m in model.modules():
+        if type(m._parameters) is dict:
+            m._parameters = AttrDict(m._parameters)
+        if type(m._buffers) is dict:
+            m._buffers = AttrDict(m._buffers)
+        if type(m._modules) is dict:
+            m._modules = AttrDict(m._modules)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # GPU WARM-UP AND INITIALIZATION
 # ─────────────────────────────────────────────────────────────────────────────
