@@ -1,8 +1,8 @@
 # FORGE-3B dependencies
-torch==2.3.0
-transformers==4.41.0
-datasets==2.19.0
-tokenizers==0.19.1
+torch>=2.3.0
+transformers>=4.41.0
+datasets>=2.19.0
+tokenizers>=0.19.1
 wandb==0.17.0
 deepspeed==0.14.2
 flash-attn>=2.5.8
