@@ -411,11 +411,17 @@ class PretrainEngine:
         # torch.compile (compile the inner model module after DeepSpeed wraps/registers parameters)
         if self.config.torch_compile:
             if hasattr(self.model_engine, "module"):
-                self.model_engine.module = compile_model(
-                    self.model_engine.module,
-                    mode=self.config.compile_mode,
-                    fullgraph=False,  # False for MoE (dynamic dispatch)
-                    dynamic=True,     # Handle variable batch sizes
+                # Use object.__setattr__ to prevent nn.Module.__setattr__ from registering the
+                # compiled module as a sub-module under self._modules, keeping it in __dict__.
+                object.__setattr__(
+                    self.model_engine,
+                    "module",
+                    compile_model(
+                        self.model_engine.module,
+                        mode=self.config.compile_mode,
+                        fullgraph=False,  # False for MoE (dynamic dispatch)
+                        dynamic=True,     # Handle variable batch sizes
+                    )
                 )
             else:
                 self.model = compile_model(
