@@ -124,6 +124,30 @@ def compile_model(
     
     max-autotune typically gives 15-40% throughput improvement on H100.
     """
+    # Configure Inductor to prevent autotuning memory exhaustion (`OutOfMemoryError`) and
+    # `Out of shared memory` (`triton_mm Required vs Hardware limit`) during kernel benchmarking.
+    try:
+        if hasattr(torch, "_inductor") and hasattr(torch._inductor, "config"):
+            cfg = torch._inductor.config
+            # 1. Prune Triton candidate configurations that exceed GPU shared memory limits
+            if hasattr(cfg, "max_autotune_prune_choices_based_on_shared_mem"):
+                cfg.max_autotune_prune_choices_based_on_shared_mem = True
+            # 2. Gracefully fall back to ATen/cuBLAS kernels if Triton autotuning fails or hits OOM
+            if hasattr(cfg, "autotune_fallback_to_aten"):
+                cfg.autotune_fallback_to_aten = True
+            # 3. Enable coordinate descent tuning to discover optimal tile sizes without exhaustive profiling OOMs
+            if hasattr(cfg, "coordinate_descent_tuning"):
+                cfg.coordinate_descent_tuning = True
+            # 4. Limit the maximum number of profiling GEMM configurations per op to prevent memory fragmentation
+            if hasattr(cfg, "nvgemm_max_profiling_configs"):
+                cfg.nvgemm_max_profiling_configs = 10
+            # 5. Run autotuning in a separate subprocess when supported so temporary autotune OOMs cannot crash the main training loop
+            if hasattr(cfg, "autotune_in_subproc"):
+                cfg.autotune_in_subproc = True
+            logger.debug("Inductor autotuner configured with shared memory pruning and OOM fallback")
+    except Exception as e:
+        logger.debug(f"Could not configure inductor autotune flags: {e}")
+
     if not torch.cuda.is_available():
         logger.warning("CUDA not available — skipping torch.compile")
         return model
