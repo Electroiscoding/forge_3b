@@ -165,8 +165,12 @@ class ForgeModelConfig:
     
     @classmethod
     def from_json(cls, path: str) -> "ForgeModelConfig":
+        import inspect
         with open(path) as f:
-            return cls(**json.load(f))
+            data = json.load(f)
+        sig = inspect.signature(cls)
+        filtered_data = {k: v for k, v in data.items() if k in sig.parameters}
+        return cls(**filtered_data)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
