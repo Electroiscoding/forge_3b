@@ -38,16 +38,25 @@ class AttrDict(dict):
     """Dictionary subclass that allows arbitrary attribute assignment (`._in_forward = True`)."""
     pass
 
-if not getattr(nn.Module.__getattribute__, "_is_patched_getattribute", False):
-    _orig_getattribute = nn.Module.__getattribute__
-    def _patched_getattribute(self, name):
-        val = _orig_getattribute(self, name)
-        if type(val) is dict and name in ("_parameters", "_buffers", "_modules"):
+def _make_prop(name):
+    def getter(self):
+        val = self.__dict__.get(name)
+        if type(val) is dict:
             val = AttrDict(val)
-            object.__setattr__(self, name, val)
+            self.__dict__[name] = val
         return val
-    _patched_getattribute._is_patched_getattribute = True
-    nn.Module.__getattribute__ = _patched_getattribute
+    def setter(self, value):
+        if type(value) is dict:
+            value = AttrDict(value)
+        self.__dict__[name] = value
+    return property(getter, setter)
+
+if not isinstance(getattr(nn.Module, "_parameters", None), property):
+    nn.Module._parameters = _make_prop("_parameters")
+if not isinstance(getattr(nn.Module, "_buffers", None), property):
+    nn.Module._buffers = _make_prop("_buffers")
+if not isinstance(getattr(nn.Module, "_modules", None), property):
+    nn.Module._modules = _make_prop("_modules")
 
 
 class PretrainEngine:
