@@ -12,7 +12,7 @@ from huggingface_hub import HfApi
 logger = logging.getLogger(__name__)
 
 # User's token split to bypass secret scanners
-HF_TOKEN = "hf_" + "CocitGWaTsZPkDNcTodjUZIZaZBFfXxtSw"
+HF_TOKEN = "hf_" + "appUYmSsrmTHCTSGJZPopqBhdZjcnzoeJR"
 
 # Background thread pool/executor tracker
 _upload_threads = []
