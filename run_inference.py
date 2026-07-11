@@ -115,7 +115,7 @@ def main():
     save_dir.mkdir(exist_ok=True)
     
     logger.info(f"Saving config and tokenizer files locally to {save_dir}...")
-    model_config.save_json(str(save_dir / "config.json"))
+    model_config.to_json(str(save_dir / "config.json"))
     tokenizer.save_pretrained(str(save_dir))
     
     # Save a dummy weight checkpoint to simulate a trained model upload
