@@ -511,6 +511,16 @@ def main():
         logger.error("CUDA not available. This smoke test requires a GPU.")
         sys.exit(1)
 
+    # Initialize distributed process group for DeepSpeed compatibility
+    import torch.distributed as dist
+    if not dist.is_initialized():
+        os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR", "localhost")
+        os.environ["MASTER_PORT"] = os.environ.get("MASTER_PORT", "29505")
+        rank = int(os.environ.get("RANK", 0))
+        world_size = int(os.environ.get("WORLD_SIZE", 1))
+        dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)
+        logger.info(f"Initialized torch.distributed NCCL backend (rank={rank}, world_size={world_size})")
+
     logger.info("=" * 70)
     logger.info("FORGE-3B: torch.compile + DeepSpeed ZeRO Smoke Test")
     logger.info(f"  Device: {device} ({torch.cuda.get_device_name(device)})")
