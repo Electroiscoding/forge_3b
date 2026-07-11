@@ -223,7 +223,7 @@ def test_compile_only(device: torch.device, config_path: str = None, data_dir: s
         model = model.to(device).to(torch.bfloat16)
 
         # Compile inner layers (the safe pattern)
-        compile_forge_layers(model, mode="default", dynamic=True)
+        compile_forge_layers(model, mode="default", dynamic=False)
 
         optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
         batch = _get_batch(2, 128, model_config.vocab_size, device, data_dir)
@@ -264,7 +264,7 @@ def test_deepspeed_eager(device: torch.device, zero_stage: int, config_path: str
         from training.gpu_optimizer import convert_to_attr_dict, setup_deepspeed_engine
 
         model, model_config = _build_small_model(config_path)
-        model = model.to(torch.bfloat16)
+        model = model.to(device).to(torch.bfloat16)
         convert_to_attr_dict(model)
 
         optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
@@ -328,12 +328,12 @@ def test_compile_before_zero(device: torch.device, zero_stage: int, config_path:
         )
 
         model, model_config = _build_small_model(config_path)
-        model = model.to(torch.bfloat16)
+        model = model.to(device).to(torch.bfloat16)
         convert_to_attr_dict(model)
 
         # ── Step 1: Compile inner layers FIRST ────────────────────────────
         logger.info("  Step 1: Compiling inner transformer layers...")
-        compile_forge_layers(model, mode="default", dynamic=True)
+        compile_forge_layers(model, mode="default", dynamic=False)
         logger.info("  Step 1: Compilation complete")
 
         # ── Step 2: THEN initialize DeepSpeed ─────────────────────────────
@@ -430,7 +430,7 @@ def test_gradient_correctness(device: torch.device, config_path: str = None, dat
         torch.manual_seed(42)
         model_compiled, _ = _build_small_model(config_path)
         model_compiled = model_compiled.to(device).to(torch.bfloat16)
-        compile_forge_layers(model_compiled, mode="default", dynamic=True)
+        compile_forge_layers(model_compiled, mode="default", dynamic=False)
 
         batch = _get_batch(2, 128, model_config.vocab_size, device, data_dir)
 
