@@ -69,14 +69,15 @@ def _get_batch(batch_size: int, seq_len: int, vocab_size: int, device: torch.dev
             
             data = np.load(str(npz_files[0]))
             input_ids_all = data["input_ids"]
-            labels_all = data["labels"]
+            loss_mask_all = data["loss_mask"]
             
             # Slice to the requested batch size and seq_len for the tiny smoke test model
             input_ids = torch.from_numpy(input_ids_all[:batch_size, :seq_len].astype(np.int64)).to(device)
-            labels = torch.from_numpy(labels_all[:batch_size, :seq_len].astype(np.int64)).to(device)
+            loss_mask = torch.from_numpy(loss_mask_all[:batch_size, :seq_len].astype(np.int64)).to(device)
             
-            # Mask -100 for labels where input was padding (assumes 0 is pad)
-            labels[input_ids == 0] = -100
+            # Reconstruct labels from loss_mask: where mask=1 -> token id, mask=0 -> -100
+            labels = input_ids.clone()
+            labels[loss_mask == 0] = -100
             
             return {"input_ids": input_ids, "labels": labels}
         except Exception as e:
@@ -132,11 +133,11 @@ def _build_small_model(config_path: str = None):
     if config_path and Path(config_path).exists():
         model_config = ForgeModelConfig.from_json(config_path)
     else:
-        # Minimal config for smoke testing
+        # Minimal config for smoke testing (with vocab_size matching real tokenizer)
         model_config = ForgeModelConfig(
             d_model=256,
             n_layers=4,
-            vocab_size=1024,
+            vocab_size=206464,
             max_seq_len=512,
             mha_layer_indices=[1, 3],
             dense_ffn_layer_indices=[0],
