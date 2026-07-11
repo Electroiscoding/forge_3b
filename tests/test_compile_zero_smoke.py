@@ -54,11 +54,25 @@ logger = logging.getLogger("smoke_test")
 
 # ─── Test Helpers ─────────────────────────────────────────────────────────────
 
-def _make_synthetic_batch(batch_size: int, seq_len: int, vocab_size: int, device: torch.device):
-    """Create a synthetic batch for forward/backward testing."""
+def _get_batch(batch_size: int, seq_len: int, vocab_size: int, device: torch.device, data_dir: str = None):
+    """Fetch a real batch from HF datasets, or fallback to synthetic."""
+    if data_dir:
+        try:
+            logger.info(f"Attempting to load real batch from HF dataset: {data_dir}")
+            from training.sft_engine import PackedSFTDataset
+            from torch.utils.data import DataLoader
+            dataset = PackedSFTDataset(data_dir=data_dir, seq_len=seq_len)
+            loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+            batch = next(iter(loader))
+            return {
+                "input_ids": batch["input_ids"].to(device),
+                "labels": batch["labels"].to(device)
+            }
+        except Exception as e:
+            logger.warning(f"Failed to load real dataset '{data_dir}': {e}. Falling back to synthetic.")
+            
     input_ids = torch.randint(0, vocab_size, (batch_size, seq_len), device=device)
     labels = input_ids.clone()
-    # Mask 20% of tokens as -100 (mimics real training)
     mask = torch.rand(batch_size, seq_len, device=device) < 0.2
     labels[mask] = -100
     return {"input_ids": input_ids, "labels": labels}
@@ -142,7 +156,7 @@ def _build_small_model(config_path: str = None):
 
 # ─── Individual Test Cases ────────────────────────────────────────────────────
 
-def test_eager_baseline(device: torch.device, config_path: str = None) -> bool:
+def test_eager_baseline(device: torch.device, config_path: str = None, data_dir: str = None) -> bool:
     """Test 1: Eager mode (no compile, no DeepSpeed) — baseline correctness."""
     logger.info("=" * 60)
     logger.info("TEST 1: Eager-mode baseline (no compile, no DeepSpeed)")
@@ -152,7 +166,7 @@ def test_eager_baseline(device: torch.device, config_path: str = None) -> bool:
         model = model.to(device).to(torch.bfloat16)
 
         optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
-        batch = _make_synthetic_batch(2, 128, model_config.vocab_size, device)
+        batch = _get_batch(2, 128, model_config.vocab_size, device, data_dir)
 
         # Forward
         with torch.autocast("cuda", dtype=torch.bfloat16):
@@ -186,7 +200,7 @@ def test_eager_baseline(device: torch.device, config_path: str = None) -> bool:
         return False
 
 
-def test_compile_only(device: torch.device, config_path: str = None) -> bool:
+def test_compile_only(device: torch.device, config_path: str = None, data_dir: str = None) -> bool:
     """Test 2: Compiled model without DeepSpeed — validates compile alone."""
     logger.info("=" * 60)
     logger.info("TEST 2: Compiled model (no DeepSpeed)")
@@ -201,7 +215,7 @@ def test_compile_only(device: torch.device, config_path: str = None) -> bool:
         compile_forge_layers(model, mode="default", dynamic=True)
 
         optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
-        batch = _make_synthetic_batch(2, 128, model_config.vocab_size, device)
+        batch = _get_batch(2, 128, model_config.vocab_size, device, data_dir)
 
         # Forward
         with torch.autocast("cuda", dtype=torch.bfloat16):
@@ -229,7 +243,7 @@ def test_compile_only(device: torch.device, config_path: str = None) -> bool:
         return False
 
 
-def test_deepspeed_eager(device: torch.device, zero_stage: int, config_path: str = None) -> bool:
+def test_deepspeed_eager(device: torch.device, zero_stage: int, config_path: str = None, data_dir: str = None) -> bool:
     """Test 3: DeepSpeed ZeRO without compile — validates ZeRO alone."""
     logger.info("=" * 60)
     logger.info(f"TEST 3: DeepSpeed ZeRO-{zero_stage} (eager, no compile)")
@@ -255,7 +269,7 @@ def test_deepspeed_eager(device: torch.device, zero_stage: int, config_path: str
                 gradient_accumulation_steps=1,
             )
 
-            batch = _make_synthetic_batch(2, 128, model_config.vocab_size, device)
+            batch = _get_batch(2, 128, model_config.vocab_size, device, data_dir)
 
             # Forward
             with torch.autocast("cuda", dtype=torch.bfloat16):
@@ -285,7 +299,7 @@ def test_deepspeed_eager(device: torch.device, zero_stage: int, config_path: str
         return False
 
 
-def test_compile_before_zero(device: torch.device, zero_stage: int, config_path: str = None) -> bool:
+def test_compile_before_zero(device: torch.device, zero_stage: int, config_path: str = None, data_dir: str = None) -> bool:
     """
     Test 4: THE CRITICAL TEST — compile inner layers BEFORE DeepSpeed init.
 
@@ -327,7 +341,7 @@ def test_compile_before_zero(device: torch.device, zero_stage: int, config_path:
             )
             logger.info("  Step 2: DeepSpeed engine initialized")
 
-            batch = _make_synthetic_batch(2, 128, model_config.vocab_size, device)
+            batch = _get_batch(2, 128, model_config.vocab_size, device, data_dir)
 
             # ── Forward pass ──────────────────────────────────────────────
             with torch.autocast("cuda", dtype=torch.bfloat16):
@@ -350,7 +364,7 @@ def test_compile_before_zero(device: torch.device, zero_stage: int, config_path:
 
             # ── Second forward+backward to verify stability ───────────────
             logger.info("  Running second forward+backward for stability check...")
-            batch2 = _make_synthetic_batch(2, 128, model_config.vocab_size, device)
+            batch2 = _get_batch(2, 128, model_config.vocab_size, device, data_dir)
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 outputs2 = model_engine(
                     input_ids=batch2["input_ids"],
@@ -388,34 +402,25 @@ def test_compile_before_zero(device: torch.device, zero_stage: int, config_path:
         return False
 
 
-def test_gradient_correctness(device: torch.device, config_path: str = None) -> bool:
-    """
-    Test 5: Verify compiled gradients match eager gradients within BF16 tolerance.
-
-    This catches silent correctness regressions where compilation produces
-    numerically different gradients.
-    """
+def test_gradient_correctness(device: torch.device, config_path: str = None, data_dir: str = None) -> bool:
+    """Test 5: Validates that gradients computed with AOTAutograd match Eager mode."""
     logger.info("=" * 60)
-    logger.info("TEST 5: Gradient correctness (compiled ≈ eager)")
+    logger.info("TEST 5: Gradient Correctness (Compiled vs Eager)")
     logger.info("=" * 60)
     try:
         from training.gpu_optimizer import compile_forge_layers
 
-        # ── Eager baseline ────────────────────────────────────────────────
+        # Build two identical models
+        torch.manual_seed(42)
         model_eager, model_config = _build_small_model(config_path)
         model_eager = model_eager.to(device).to(torch.bfloat16)
 
-        # ── Compiled model (same weights) ─────────────────────────────────
+        torch.manual_seed(42)
         model_compiled, _ = _build_small_model(config_path)
         model_compiled = model_compiled.to(device).to(torch.bfloat16)
-
-        # Copy weights from eager to compiled
-        model_compiled.load_state_dict(model_eager.state_dict())
         compile_forge_layers(model_compiled, mode="default", dynamic=True)
 
-        # Same input
-        torch.manual_seed(42)
-        batch = _make_synthetic_batch(2, 128, model_config.vocab_size, device)
+        batch = _get_batch(2, 128, model_config.vocab_size, device, data_dir)
 
         # Eager forward+backward
         with torch.autocast("cuda", dtype=torch.bfloat16):
@@ -477,6 +482,8 @@ def main():
                         help="Path to model config JSON (defaults to minimal test config)")
     parser.add_argument("--zero_stage", type=int, default=2, choices=[0, 1, 2, 3],
                         help="DeepSpeed ZeRO stage to test")
+    parser.add_argument("--data_dir", type=str, default="Phase-Technologies/forge-3b-sft-data",
+                        help="Path to real HF dataset or local dir (to use instead of synthetic data)")
     parser.add_argument("--quick", action="store_true",
                         help="Quick mode: skip gradient correctness test")
     parser.add_argument("--local_rank", type=int, default=int(os.environ.get("LOCAL_RANK", 0)),
@@ -506,22 +513,22 @@ def main():
     results = {}
 
     # Test 1: Eager baseline
-    results["eager_baseline"] = test_eager_baseline(device, args.config)
+    results["eager_baseline"] = test_eager_baseline(device, args.config, args.data_dir)
 
     # Test 2: Compiled without DeepSpeed
-    results["compile_only"] = test_compile_only(device, args.config)
+    results["compile_only"] = test_compile_only(device, args.config, args.data_dir)
 
     # Test 3: DeepSpeed eager (if stage > 0)
     if args.zero_stage > 0:
-        results["deepspeed_eager"] = test_deepspeed_eager(device, args.zero_stage, args.config)
+        results["deepspeed_eager"] = test_deepspeed_eager(device, args.zero_stage, args.config, args.data_dir)
 
     # Test 4: THE CRITICAL TEST — compile before ZeRO
     if args.zero_stage > 0:
-        results["compile_before_zero"] = test_compile_before_zero(device, args.zero_stage, args.config)
+        results["compile_before_zero"] = test_compile_before_zero(device, args.zero_stage, args.config, args.data_dir)
 
     # Test 5: Gradient correctness
     if not args.quick:
-        results["gradient_correctness"] = test_gradient_correctness(device, args.config)
+        results["gradient_correctness"] = test_gradient_correctness(device, args.config, args.data_dir)
 
     # ── Summary ───────────────────────────────────────────────────────────
     logger.info("=" * 70)
