@@ -59,15 +59,26 @@ def _get_batch(batch_size: int, seq_len: int, vocab_size: int, device: torch.dev
     if data_dir:
         try:
             logger.info(f"Attempting to load real batch from HF dataset: {data_dir}")
-            from training.sft_engine import PackedSFTDataset
-            from torch.utils.data import DataLoader
-            dataset = PackedSFTDataset(data_dir=data_dir, seq_len=seq_len)
-            loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-            batch = next(iter(loader))
-            return {
-                "input_ids": batch["input_ids"].to(device),
-                "labels": batch["labels"].to(device)
-            }
+            import numpy as np
+            from pathlib import Path
+            from data.dataset import resolve_data_dir
+            resolved = resolve_data_dir(data_dir)
+            npz_files = list(Path(resolved).glob("**/*.npz"))
+            if not npz_files:
+                raise FileNotFoundError("No .npz files found")
+            
+            data = np.load(str(npz_files[0]))
+            input_ids_all = data["input_ids"]
+            labels_all = data["labels"]
+            
+            # Slice to the requested batch size and seq_len for the tiny smoke test model
+            input_ids = torch.from_numpy(input_ids_all[:batch_size, :seq_len].astype(np.int64)).to(device)
+            labels = torch.from_numpy(labels_all[:batch_size, :seq_len].astype(np.int64)).to(device)
+            
+            # Mask -100 for labels where input was padding (assumes 0 is pad)
+            labels[input_ids == 0] = -100
+            
+            return {"input_ids": input_ids, "labels": labels}
         except Exception as e:
             logger.warning(f"Failed to load real dataset '{data_dir}': {e}. Falling back to synthetic.")
             
@@ -348,13 +359,14 @@ def test_compile_before_zero(device: torch.device, zero_stage: int, config_path:
                 outputs = model_engine(
                     input_ids=batch["input_ids"],
                     labels=batch["labels"],
-                    return_aux_loss=True,
+                    return_aux_loss=True
                 )
                 loss = outputs["loss"]
-            logger.info(f"  Forward OK — loss={loss.item():.4f}")
+                
+            logger.info(f"  Step 3: Forward OK — loss={loss.item():.4f}")
 
-            # ── Backward pass (THIS IS WHERE ISSUE #8 CRASH WOULD OCCUR) ─
-            logger.info("  Executing backward pass (Issue #8 crash point)...")
+            # ── Backward pass ─────────────────────────────────────────────
+            logger.info("  Step 4: Running backward (checking for race condition)...")
             model_engine.backward(loss)
             logger.info("  ✓ Backward completed WITHOUT NoneType crash!")
 
@@ -369,7 +381,7 @@ def test_compile_before_zero(device: torch.device, zero_stage: int, config_path:
                 outputs2 = model_engine(
                     input_ids=batch2["input_ids"],
                     labels=batch2["labels"],
-                    return_aux_loss=True,
+                    return_aux_loss=True
                 )
                 loss2 = outputs2["loss"]
             model_engine.backward(loss2)
@@ -425,12 +437,12 @@ def test_gradient_correctness(device: torch.device, config_path: str = None, dat
         # Eager forward+backward
         with torch.autocast("cuda", dtype=torch.bfloat16):
             out_eager = model_eager(input_ids=batch["input_ids"], labels=batch["labels"], return_aux_loss=True)
-            out_eager["loss"].backward()
+        out_eager["loss"].backward()
 
         # Compiled forward+backward
         with torch.autocast("cuda", dtype=torch.bfloat16):
             out_compiled = model_compiled(input_ids=batch["input_ids"], labels=batch["labels"], return_aux_loss=True)
-            out_compiled["loss"].backward()
+        out_compiled["loss"].backward()
 
         # Compare losses
         loss_diff = abs(out_eager["loss"].item() - out_compiled["loss"].item())
