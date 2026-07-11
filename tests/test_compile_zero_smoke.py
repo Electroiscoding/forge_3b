@@ -516,8 +516,12 @@ def main():
     if not dist.is_initialized():
         os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR", "localhost")
         os.environ["MASTER_PORT"] = os.environ.get("MASTER_PORT", "29505")
-        rank = int(os.environ.get("RANK", 0))
-        world_size = int(os.environ.get("WORLD_SIZE", 1))
+        os.environ["RANK"] = os.environ.get("RANK", "0")
+        os.environ["WORLD_SIZE"] = os.environ.get("WORLD_SIZE", "1")
+        os.environ["LOCAL_RANK"] = os.environ.get("LOCAL_RANK", str(args.local_rank))
+        
+        rank = int(os.environ["RANK"])
+        world_size = int(os.environ["WORLD_SIZE"])
         dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)
         logger.info(f"Initialized torch.distributed NCCL backend (rank={rank}, world_size={world_size})")
 
