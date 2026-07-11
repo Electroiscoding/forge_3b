@@ -314,9 +314,12 @@ def setup_deepspeed_engine(
         )
         return model_engine, optimizer
 
-    except ImportError:
-        logger.warning("DeepSpeed not available — returning unwrapped model")
+    except ImportError as e:
+        logger.warning(f"DeepSpeed not available (ImportError: {e}) — returning unwrapped model")
         return model, optimizer
+    except Exception as e:
+        logger.exception("Failed to initialize DeepSpeed engine")
+        raise e
 
 
 # ─────────────────────────────────────────────────────────────────────────────
