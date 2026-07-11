@@ -379,30 +379,21 @@ class PretrainEngine:
         """
         Full three-phase pretraining entrypoint.
         """
-        from training.gpu_optimizer import compile_model, warmup_gpu
+        from training.gpu_optimizer import warmup_gpu
         
         # ── Setup ─────────────────────────────────────────────────────────────
         warmup_gpu(self.device)
         
-        # torch.compile (compile individual inner block layers BEFORE DeepSpeed initialization
-        # so ZeRO post-accumulate-grad hooks attach to outer parameters and execute cleanly during backward pass)
+        # torch.compile — compile individual inner block layers BEFORE DeepSpeed
+        # initialization to avoid ZeRO post-accumulate-grad hook race condition
+        # with AOTAutograd (GitHub Issue #8). See compile_forge_layers() docstring.
         if self.config.torch_compile:
-            logger.info("Compiling individual transformer layers before DeepSpeed initialization...")
-            if hasattr(self.model, "layers") and isinstance(self.model.layers, nn.ModuleList):
-                for i in range(len(self.model.layers)):
-                    self.model.layers[i] = compile_model(
-                        self.model.layers[i],
-                        mode=self.config.compile_mode,
-                        fullgraph=False,
-                        dynamic=True,
-                    )
-            else:
-                self.model = compile_model(
-                    self.model,
-                    mode=self.config.compile_mode,
-                    fullgraph=False,
-                    dynamic=True,
-                )
+            from training.gpu_optimizer import compile_forge_layers
+            compile_forge_layers(
+                self.model,
+                mode=self.config.compile_mode,
+                dynamic=True,
+            )
         
         # DeepSpeed (initialize offloading and ZeRO hooks around the compiled/uncompiled hierarchy)
         self.model_engine, optimizer = self._setup_deepspeed(self.model, optimizer, lr_scheduler)

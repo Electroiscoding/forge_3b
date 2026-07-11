@@ -173,6 +173,152 @@ def compile_model(
         return model
 
 
+def compile_forge_layers(
+    model: nn.Module,
+    mode: str = "max-autotune",
+    dynamic: bool = True,
+) -> nn.Module:
+    """
+    Compile individual transformer block layers BEFORE DeepSpeed initialization.
+
+    This is the canonical entry point for torch.compile in all FORGE training
+    pipelines (pretrain, SFT, DPO). It MUST be called before deepspeed.initialize()
+    to avoid the ZeRO post-accumulate-grad hook race condition with AOTAutograd.
+
+    Root cause (GitHub Issue #8):
+        When torch.compile wraps a module AFTER deepspeed.initialize(), DeepSpeed's
+        post_accumulate_grad_hook fires before AOTAutograd has written functional
+        gradient outputs back to param.grad. The hook reads param.grad = None and
+        crashes with: AttributeError: 'NoneType' object has no attribute 'view'
+
+    Fix:
+        By compiling individual inner layer blocks (model.layers[i]) before
+        deepspeed.initialize(), Inductor only compiles the functional forward/backward
+        kernels strictly inside each layer. Parameter .grad accumulation stays in the
+        eager outer autograd loop, so param.grad is synchronously populated when
+        DeepSpeed hooks fire.
+
+    Args:
+        model: The ForgeModel (or any nn.Module with a .layers ModuleList)
+        mode: torch.compile mode ("max-autotune" for H100, "reduce-overhead" for smaller GPUs)
+        dynamic: Whether to use dynamic shapes (True recommended for variable seq lengths)
+
+    Returns:
+        The model with compiled inner layers (in-place modification of model.layers)
+    """
+    if not torch.cuda.is_available():
+        logger.warning("CUDA not available — skipping layer compilation")
+        return model
+
+    if not hasattr(model, "layers") or not isinstance(model.layers, nn.ModuleList):
+        logger.warning(
+            "Model does not have a .layers ModuleList — falling back to "
+            "whole-model compile (NOT safe with DeepSpeed ZeRO). "
+            "Use --no_compile if running with DeepSpeed."
+        )
+        return compile_model(model, mode=mode, fullgraph=False, dynamic=dynamic)
+
+    n_layers = len(model.layers)
+    logger.info(
+        f"Compiling {n_layers} individual transformer layers "
+        f"(mode={mode!r}, dynamic={dynamic}) BEFORE DeepSpeed initialization "
+        f"to avoid ZeRO post-accumulate-grad hook race condition..."
+    )
+
+    n_compiled = 0
+    n_failed = 0
+    for i in range(n_layers):
+        try:
+            model.layers[i] = compile_model(
+                model.layers[i],
+                mode=mode,
+                fullgraph=False,
+                dynamic=dynamic,
+            )
+            n_compiled += 1
+        except Exception as e:
+            logger.warning(f"Failed to compile layer {i}: {e}. Using uncompiled.")
+            n_failed += 1
+
+    logger.info(
+        f"Layer compilation complete: {n_compiled}/{n_layers} compiled, "
+        f"{n_failed} failed (using uncompiled fallback)"
+    )
+    return model
+
+
+def detect_zero_stage(deepspeed_config_path: str) -> int:
+    """
+    Detect the ZeRO optimization stage from a DeepSpeed config file.
+
+    Returns:
+        ZeRO stage (0, 1, 2, or 3). Returns 0 if detection fails.
+    """
+    try:
+        import json as _json
+        with open(deepspeed_config_path) as f:
+            ds_config = _json.load(f)
+        stage = ds_config.get("zero_optimization", {}).get("stage", 0)
+        return int(stage)
+    except Exception as e:
+        logger.warning(f"Failed to detect ZeRO stage from {deepspeed_config_path}: {e}")
+        return 0
+
+
+def setup_deepspeed_engine(
+    model: nn.Module,
+    optimizer,
+    deepspeed_config_path: str,
+    micro_batch_size_per_gpu: int = 1,
+    gradient_accumulation_steps: int = 1,
+):
+    """
+    Initialize a DeepSpeed engine with dynamic config injection.
+
+    This should be called AFTER compile_forge_layers() to ensure correct
+    hook ordering (compile inner layers first, then DeepSpeed hooks on outer params).
+
+    Args:
+        model: The model (with already-compiled inner layers if torch.compile is enabled)
+        optimizer: The optimizer (may be replaced by DeepSpeed's internal optimizer)
+        deepspeed_config_path: Path to the DeepSpeed JSON config
+        micro_batch_size_per_gpu: Micro batch size to inject into config
+        gradient_accumulation_steps: GA steps to inject into config
+
+    Returns:
+        (model_engine, optimizer) tuple from deepspeed.initialize()
+    """
+    try:
+        import deepspeed
+        import json as _json
+
+        with open(deepspeed_config_path) as f:
+            ds_config = _json.load(f)
+
+        # Inject dynamic values — resolve "auto" placeholders
+        ds_config["train_micro_batch_size_per_gpu"] = micro_batch_size_per_gpu
+        if ds_config.get("gradient_accumulation_steps") == "auto":
+            ds_config["gradient_accumulation_steps"] = gradient_accumulation_steps
+
+        zero_stage = ds_config.get("zero_optimization", {}).get("stage", 0)
+
+        model_engine, optimizer, _, _ = deepspeed.initialize(
+            model=model,
+            optimizer=optimizer,
+            config=ds_config,
+        )
+
+        logger.info(
+            f"DeepSpeed ZeRO-{zero_stage} engine initialized "
+            f"(micro_batch={micro_batch_size_per_gpu}, ga_steps={gradient_accumulation_steps})"
+        )
+        return model_engine, optimizer
+
+    except ImportError:
+        logger.warning("DeepSpeed not available — returning unwrapped model")
+        return model, optimizer
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # MIXED PRECISION CONTEXTS
 # ─────────────────────────────────────────────────────────────────────────────

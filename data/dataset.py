@@ -30,6 +30,31 @@ except Exception as e:
     logger.debug(f"Failed to raise open file limit: {e}")
 
 
+def resolve_data_dir(data_dir: str) -> str:
+    """
+    If data_dir is a Hugging Face dataset repository (e.g. Phase-Technologies/...),
+    download it using snapshot_download and return the local cache path.
+    This ensures data is pulled when the training pod/cluster starts.
+    """
+    if data_dir.startswith("hf://"):
+        data_dir = data_dir[5:]
+        
+    if data_dir.startswith("Phase-Technologies/"):
+        try:
+            from huggingface_hub import snapshot_download
+            logger.info(f"Resolving Hugging Face dataset from hub: {data_dir}")
+            return snapshot_download(
+                repo_id=data_dir, 
+                repo_type="dataset",
+                resume_download=True,
+            )
+        except ImportError:
+            logger.error("huggingface_hub is not installed. Cannot download dataset.")
+            raise
+    
+    return data_dir
+
+
 class PackedTokenDataset(Dataset):
     """
     Memory-mapped dataset of pre-tokenized, packed sequences.
@@ -50,6 +75,7 @@ class PackedTokenDataset(Dataset):
         self.seq_len = seq_len
         self.split = split
         
+        data_dir = resolve_data_dir(data_dir)
         data_path = Path(data_dir)
         npy_files = sorted(data_path.glob(f"**/{split}*.npy"))
         

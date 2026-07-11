@@ -49,7 +49,10 @@ class PackedSFTDataset(Dataset):
         max_samples: Optional[int] = None,
         seed: int = 42,
     ):
+        from data.dataset import resolve_data_dir
         self.seq_len = seq_len
+        
+        data_dir = resolve_data_dir(data_dir)
         data_path = Path(data_dir)
         
         # Find all .npz shard files recursively
@@ -238,10 +241,48 @@ class SFTEngine:
         optimizer: torch.optim.Optimizer,
         scheduler,
     ):
-        """Run SFT training loop."""
-        from training.gpu_optimizer import bf16_autocast, clip_grad_norm_and_log
+        """Run SFT training loop.
         
-        self.model.train()
+        Compilation + DeepSpeed initialization order (Issue #8 fix):
+        1. compile_forge_layers() — compiles inner transformer blocks
+        2. setup_deepspeed_engine() — attaches ZeRO hooks on outer params
+        This ensures param.grad is synchronously populated when hooks fire.
+        """
+        from training.gpu_optimizer import (
+            bf16_autocast, clip_grad_norm_and_log,
+            compile_forge_layers, setup_deepspeed_engine,
+            warmup_gpu,
+        )
+        
+        warmup_gpu(self.device)
+        
+        # ── Step 1: torch.compile inner layers BEFORE DeepSpeed init ──────
+        # This is the critical ordering that prevents the ZeRO
+        # post-accumulate-grad hook race condition with AOTAutograd.
+        use_compile = getattr(self.config, 'torch_compile', True)
+        if use_compile:
+            compile_mode = getattr(self.config, 'compile_mode', 'max-autotune')
+            compile_forge_layers(self.model, mode=compile_mode, dynamic=True)
+        
+        # ── Step 2: DeepSpeed engine init (hooks attach to outer params) ──
+        has_deepspeed = False
+        model_engine = self.model
+        if hasattr(self.config, 'deepspeed_config') and self.config.deepspeed_config:
+            ga_steps = max(1, self.config.global_batch_tokens // (
+                self.config.micro_batch_size_per_gpu * self.config.seq_len * self.world_size
+            ))
+            model_engine, optimizer = setup_deepspeed_engine(
+                model=self.model,
+                optimizer=optimizer,
+                deepspeed_config_path=self.config.deepspeed_config,
+                micro_batch_size_per_gpu=self.config.micro_batch_size_per_gpu,
+                gradient_accumulation_steps=ga_steps,
+            )
+            has_deepspeed = hasattr(model_engine, 'backward')
+            if has_deepspeed:
+                logger.info("SFT: Using DeepSpeed engine for backward/step")
+        
+        model_engine.train()
         
         target_tokens = self.config.total_tokens
         tokens_processed = 0
@@ -259,7 +300,9 @@ class SFTEngine:
         while tokens_processed < target_tokens:
             if self.is_main:
                 logger.info(f"Starting SFT Step {self._global_step + 1} (accumulating {ga_steps} micro-batches)...")
-            optimizer.zero_grad(set_to_none=True)
+            
+            if not has_deepspeed:
+                optimizer.zero_grad(set_to_none=True)
             
             accum_loss = 0.0
             
@@ -276,18 +319,28 @@ class SFTEngine:
                 labels = batch["labels"].to(self.device, non_blocking=True)
                 
                 with bf16_autocast(enabled=self.config.bf16):
-                    outputs = self.model(
+                    outputs = model_engine(
                         input_ids=input_ids,
                         labels=labels,
                         return_aux_loss=False,  # no MoE loss during SFT
                     )
                     loss = outputs["loss"] / ga_steps
                 
-                loss.backward()
+                # Backward: DeepSpeed handles accumulation + grad sync internally
+                if has_deepspeed:
+                    model_engine.backward(loss)
+                    model_engine.step()
+                else:
+                    loss.backward()
+                
                 accum_loss += loss.item() * ga_steps
             
-            grad_norm = clip_grad_norm_and_log(self.model.parameters(), self.config.grad_clip)
-            optimizer.step()
+            # Gradient clipping and optimizer step (non-DeepSpeed path)
+            if has_deepspeed:
+                grad_norm = model_engine.get_global_grad_norm() if hasattr(model_engine, "get_global_grad_norm") else 0.0
+            else:
+                grad_norm = clip_grad_norm_and_log(self.model.parameters(), self.config.grad_clip)
+                optimizer.step()
             
             batch_tokens = self.config.micro_batch_size_per_gpu * self.config.seq_len * \
                            self.world_size * ga_steps
@@ -314,7 +367,10 @@ class SFTEngine:
             if self._global_step % self.config.save_every_n_steps == 0 and self.is_main:
                 ckpt_dir = Path(self.config.output_dir) / f"sft_step{self._global_step}"
                 ckpt_dir.mkdir(parents=True, exist_ok=True)
-                torch.save(self.model.state_dict(), str(ckpt_dir / "model.pt"))
+                if has_deepspeed and hasattr(model_engine, "save_checkpoint"):
+                    model_engine.save_checkpoint(str(ckpt_dir))
+                else:
+                    torch.save(self.model.state_dict(), str(ckpt_dir / "model.pt"))
                 logger.info(f"SFT checkpoint saved: {ckpt_dir}")
                 # Upload checkpoint
                 upload_folder_async(str(ckpt_dir), repo_name="forge-3b-sft", folder_in_repo=ckpt_dir.name)

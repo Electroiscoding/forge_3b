@@ -182,7 +182,7 @@ class PretrainConfig:
     """Phase-aware pretraining configuration."""
     
     output_dir: str = "./checkpoints/forge_3b_pretrain"
-    data_dir: str = "./data/tokenized"
+    data_dir: str = "Phase-Technologies/forge-3b-pretrain-data"
     resume_from_checkpoint: Optional[str] = None
     
     # ── Token Budget ──────────────────────────────────────────────────────────
@@ -257,7 +257,7 @@ class SFTConfig:
     
     base_model_path: str = "./checkpoints/forge_3b_pretrain/final"
     output_dir: str = "./checkpoints/forge_3b_sft"
-    data_dir: str = "./data/sft"
+    data_dir: str = "Phase-Technologies/forge-3b-sft-data"
     
     # ── Training ──────────────────────────────────────────────────────────────
     total_tokens: int = 1_400_000_000
@@ -283,6 +283,8 @@ class SFTConfig:
     deepspeed_config: str = "./configs/ds_zero3_sft.json"
     num_gpus: int = 16
     bf16: bool = True
+    torch_compile: bool = True
+    compile_mode: str = "max-autotune"
 
 
 @dataclass  
@@ -291,7 +293,7 @@ class DPOConfig:
     
     base_model_path: str = "./checkpoints/forge_3b_sft/final"
     output_dir: str = "./checkpoints/forge_3b_dpo"
-    data_path: str = "./data/dpo/preferences.jsonl"
+    data_dir: str = "Phase-Technologies/forge-3b-dpo-data"
     
     # ── DPO ───────────────────────────────────────────────────────────────────
     beta: float = 0.1                  # KL penalty coefficient
@@ -318,6 +320,8 @@ class DPOConfig:
     deepspeed_config: str = "./configs/ds_zero3_sft.json"
     num_gpus: int = 16
     bf16: bool = True
+    torch_compile: bool = True
+    compile_mode: str = "max-autotune"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

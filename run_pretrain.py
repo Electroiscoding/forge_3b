@@ -9,7 +9,7 @@ Usage (16× H100 on RunPod):
         --wandb_project forge_3b_pretrain
 
 Single GPU testing:
-    python run_pretrain.py --data_dir ./data --output_dir ./ckpt --num_gpus 1
+    python run_pretrain.py --data_dir Phase-Technologies/forge-3b-pretrain-data --output_dir ./ckpt --num_gpus 1
 """
 
 import os
@@ -43,7 +43,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description="FORGE-3B Pretraining")
     
     # Paths
-    parser.add_argument("--data_dir", type=str, required=True)
+    parser.add_argument("--data_dir", type=str, required=True,
+                        help="HF repo string or local directory containing pretraining data domains")
     parser.add_argument("--output_dir", type=str, default="./checkpoints/forge_3b_pretrain")
     parser.add_argument("--resume_from", type=str, default=None)
     
@@ -268,7 +269,9 @@ def main():
 
     from data.dataset import PackedTokenDataset, WeightedDataMixer, build_dataloader
 
-    data_dir = Path(args.data_dir)
+    from data.dataset import resolve_data_dir
+    data_dir_resolved = resolve_data_dir(args.data_dir)
+    data_dir = Path(data_dir_resolved)
 
     def _try_load_domain(
         domain_subdir: str,

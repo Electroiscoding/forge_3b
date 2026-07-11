@@ -5,14 +5,14 @@ FORGE-3B Direct Preference Optimization (DPO) Entry Point.
 Usage (16× H100 on RunPod):
     deepspeed --num_gpus=16 run_dpo.py \\
         --base_model  /workspace/checkpoints/forge_3b_sft/final \\
-        --data_path   /workspace/data/dpo/preferences.jsonl \\
+        --data_dir   /workspace/data/dpo/preferences.jsonl \\
         --output_dir  /workspace/checkpoints/forge_3b_dpo \\
         --wandb_project forge_3b_dpo
 
 Single GPU:
-    python run_dpo.py \\
-        --base_model ./checkpoints/forge_3b_sft/final \\
-        --data_path  ./data/dpo/preferences.jsonl \\
+    python run_dpo.py \
+        --base_model ./checkpoints/forge_3b_sft/final \
+        --data_dir   Phase-Technologies/forge-3b-dpo-data \
         --output_dir ./checkpoints/forge_3b_dpo
 """
 
@@ -45,8 +45,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     # Paths
     p.add_argument("--base_model",   required=True,
                    help="SFT model dir (contains model_bf16.pt + tokenizer/)")
-    p.add_argument("--data_path",    required=True,
-                   help="JSONL with preference pairs (prompt/chosen/rejected fields)")
+    p.add_argument("--data_dir",     required=True,
+                   help="HF repo string or local directory with .npz shards / .jsonl files")
     p.add_argument("--output_dir",   default="./checkpoints/forge_3b_dpo")
     p.add_argument("--model_config", default=None)
     p.add_argument("--resume_from",  default=None)
@@ -75,6 +75,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
     # Infrastructure
     p.add_argument("--deepspeed_config", default="./configs/ds_zero3_sft.json")
+    p.add_argument("--no_compile",       action="store_true")
     p.add_argument("--bf16",             action="store_true", default=True)
     p.add_argument("--no_gradient_checkpointing", action="store_true")
     p.add_argument("--save_every_steps", type=int, default=100)
@@ -171,7 +172,7 @@ def main():
     dpo_config = DPOConfig(
         base_model_path=args.base_model,
         output_dir=args.output_dir,
-        data_path=args.data_path,
+        data_dir=args.data_dir,
         beta=args.beta,
         loss_type=args.loss_type,
         batch_size_pairs=args.batch_pairs,
@@ -186,6 +187,7 @@ def main():
         deepspeed_config=args.deepspeed_config,
         num_gpus=world_size,
         bf16=args.bf16,
+        torch_compile=not args.no_compile,
     )
 
     # ── Tokenizer ─────────────────────────────────────────────────────────────
@@ -287,50 +289,26 @@ def main():
         logger.info("Gradient checkpointing enabled on policy")
 
     # ── Dataset ───────────────────────────────────────────────────────────────
-    data_path = Path(args.data_path)
+    from data.dataset import resolve_data_dir
+    data_dir_resolved = resolve_data_dir(args.data_dir)
+    data_path = Path(data_dir_resolved)
     
-    # If data_path is a directory, merge all .jsonl files into one
-    if data_path.is_dir():
-        merged_path = data_path / "_merged_dpo.jsonl"
-        if not merged_path.exists():
-            logger.info(f"Merging DPO JSONL files from {data_path}...")
-            jsonl_files = sorted(data_path.glob("**/*.jsonl"))
-            if not jsonl_files:
-                raise FileNotFoundError(f"No .jsonl files found in {data_path}")
-            with open(merged_path, "w") as out:
-                for jf in jsonl_files:
-                    with open(jf) as inp:
-                        for line in inp:
-                            if line.strip():
-                                out.write(line if line.endswith("\n") else line + "\n")
-            logger.info(f"Merged {len(jsonl_files)} files → {merged_path}")
-        actual_data_path = str(merged_path)
-    else:
-        if not data_path.exists():
-            raise FileNotFoundError(
-                f"DPO data not found: {data_path}\n"
-                "Pass a .jsonl file or a directory containing .jsonl files."
-            )
-        actual_data_path = str(data_path)
+    # Auto-detect format based on file extensions (.npz means pretokenized)
+    has_npz = len(list(data_path.glob("**/*.npz"))) > 0
+    is_jsonl_file = data_path.is_file() and data_path.suffix == ".jsonl"
     
-    # Sniff the first line to detect format
-    with open(actual_data_path) as f:
-        first_line = f.readline().strip()
-    first_item = json.loads(first_line)
-    is_pretokenized = ("prompt_ids" in first_item or "chosen_full_ids" in first_item)
-    
-    if is_pretokenized:
-        logger.info("Detected pre-tokenized DPO data — using PreTokenizedPreferenceDataset")
+    if has_npz or is_jsonl_file:
+        logger.info("Detected pre-tokenized DPO data (.npz shards or .jsonl) — using PreTokenizedPreferenceDataset")
         from training.dpo_engine import PreTokenizedPreferenceDataset
         dataset = PreTokenizedPreferenceDataset(
-            data_path=actual_data_path,
+            data_dir=data_dir_resolved,
             seq_len=args.seq_len,
         )
     else:
         logger.info("Detected raw text DPO data — using PreferenceDataset (live tokenization)")
         from training.dpo_engine import PreferenceDataset
         dataset = PreferenceDataset(
-            data_path=actual_data_path,
+            data_path=str(data_path),
             tokenizer=tokenizer,
             seq_len=args.seq_len,
         )

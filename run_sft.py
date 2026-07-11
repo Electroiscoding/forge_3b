@@ -165,6 +165,7 @@ def main():
         deepspeed_config=args.deepspeed_config,
         num_gpus=world_size,
         bf16=args.bf16,
+        torch_compile=not args.no_compile,
     )
 
     # ── Tokenizer ─────────────────────────────────────────────────────────────
@@ -280,9 +281,12 @@ def main():
     logger.info("Loading SFT dataset...")
     from data.dataset import build_dataloader
 
+    from data.dataset import resolve_data_dir
+    data_dir_resolved = resolve_data_dir(args.data_dir)
+
     # Auto-detect format: pre-tokenized .npz shards vs raw JSONL
-    npz_files = list(Path(args.data_dir).glob("**/*.npz"))
-    train_jsonl = Path(args.data_dir) / "train.jsonl"
+    npz_files = list(Path(data_dir_resolved).glob("**/*.npz"))
+    train_jsonl = Path(data_dir_resolved) / "train.jsonl"
 
     if npz_files:
         # Pre-tokenized format (from Phase-Technologies/forge-3b-sft-data)
@@ -290,7 +294,7 @@ def main():
         from training.sft_engine import PackedSFTDataset
 
         train_dataset = PackedSFTDataset(
-            data_dir=args.data_dir,
+            data_dir=data_dir_resolved,
             seq_len=args.seq_len,
             seed=args.seed,
         )
@@ -308,7 +312,7 @@ def main():
         )
     else:
         raise FileNotFoundError(
-            f"No SFT data found in {args.data_dir}.\n"
+            f"No SFT data found in {data_dir_resolved}.\n"
             "Expected either:\n"
             "  - .npz shards with input_ids + loss_mask (pre-tokenized)\n"
             "  - train.jsonl with 'messages' field (raw text)"

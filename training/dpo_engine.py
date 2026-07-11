@@ -45,18 +45,50 @@ class PreTokenizedPreferenceDataset(Dataset):
     
     def __init__(
         self,
-        data_path: str,
+        data_dir: str,
         seq_len: int = 4096,
     ):
+        from data.dataset import resolve_data_dir
+        import numpy as np
         self.seq_len = seq_len
         
-        self.samples = []
-        with open(data_path) as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    self.samples.append(json.loads(line))
+        data_dir = resolve_data_dir(data_dir)
+        data_path = Path(data_dir)
         
+        self.samples = []
+        
+        if data_path.is_file() and data_path.suffix == ".jsonl":
+            # Legacy single JSONL fallback
+            with open(data_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        self.samples.append(json.loads(line))
+        else:
+            # Load from .npz shards
+            npz_files = sorted(data_path.glob("**/*.npz"))
+            if not npz_files:
+                raise FileNotFoundError(f"No .npz files found in {data_dir}")
+                
+            for f in npz_files:
+                try:
+                    data = np.load(str(f), allow_pickle=True)
+                    chosen_full_ids = data["chosen_full_ids"]
+                    rejected_full_ids = data["rejected_full_ids"]
+                    chosen_loss_mask = data["chosen_loss_mask"]
+                    rejected_loss_mask = data["rejected_loss_mask"]
+                    
+                    for i in range(len(chosen_full_ids)):
+                        self.samples.append({
+                            "chosen_full_ids": chosen_full_ids[i].tolist() if hasattr(chosen_full_ids[i], "tolist") else list(chosen_full_ids[i]),
+                            "rejected_full_ids": rejected_full_ids[i].tolist() if hasattr(rejected_full_ids[i], "tolist") else list(rejected_full_ids[i]),
+                            "chosen_loss_mask": chosen_loss_mask[i].tolist() if hasattr(chosen_loss_mask[i], "tolist") else list(chosen_loss_mask[i]),
+                            "rejected_loss_mask": rejected_loss_mask[i].tolist() if hasattr(rejected_loss_mask[i], "tolist") else list(rejected_loss_mask[i]),
+                        })
+                    logger.info(f"  Loaded DPO shard {f.name}: {len(chosen_full_ids):,} samples")
+                except Exception as e:
+                    logger.warning(f"Failed to load DPO shard {f}: {e}")
+
         # Detect which fields are available
         if self.samples:
             s0 = self.samples[0]
@@ -316,10 +348,47 @@ class DPOEngine:
         optimizer: torch.optim.Optimizer,
         scheduler,
     ):
-        """Run DPO training."""
-        from training.gpu_optimizer import bf16_autocast, clip_grad_norm_and_log
+        """Run DPO training.
         
-        self.policy.train()
+        Compilation + DeepSpeed initialization order (Issue #8 fix):
+        1. compile_forge_layers(policy) — compiles inner transformer blocks
+        2. setup_deepspeed_engine(policy) — attaches ZeRO hooks on outer params
+        The reference model is frozen (no grad), so whole-model compile is safe.
+        """
+        from training.gpu_optimizer import (
+            bf16_autocast, clip_grad_norm_and_log,
+            compile_forge_layers, setup_deepspeed_engine, compile_model,
+            warmup_gpu,
+        )
+        
+        warmup_gpu(self.device)
+        
+        # ── Step 1: torch.compile inner layers BEFORE DeepSpeed init ──────
+        use_compile = getattr(self.config, 'torch_compile', True)
+        if use_compile:
+            compile_mode = getattr(self.config, 'compile_mode', 'max-autotune')
+            # Policy model: MUST compile inner layers only (Issue #8)
+            compile_forge_layers(self.policy, mode=compile_mode, dynamic=True)
+            # Reference model: frozen (no grad hooks) — safe to compile whole module
+            logger.info("Compiling frozen reference model (no grad — whole-model compile safe)...")
+            self.ref = compile_model(self.ref, mode=compile_mode, fullgraph=False, dynamic=True)
+        
+        # ── Step 2: DeepSpeed engine init for policy model ────────────────
+        has_deepspeed = False
+        policy_engine = self.policy
+        if hasattr(self.config, 'deepspeed_config') and self.config.deepspeed_config:
+            policy_engine, optimizer = setup_deepspeed_engine(
+                model=self.policy,
+                optimizer=optimizer,
+                deepspeed_config_path=self.config.deepspeed_config,
+                micro_batch_size_per_gpu=self.config.batch_size_pairs,
+                gradient_accumulation_steps=self.config.gradient_accumulation_steps,
+            )
+            has_deepspeed = hasattr(policy_engine, 'backward')
+            if has_deepspeed:
+                logger.info("DPO: Using DeepSpeed engine for policy backward/step")
+        
+        policy_engine.train()
         
         all_rewards_chosen = []
         all_rewards_rejected = []
@@ -339,7 +408,8 @@ class DPOEngine:
                 rejected_input = batch["rejected_input_ids"].to(self.device, non_blocking=True)
                 rejected_labels = batch["rejected_labels"].to(self.device, non_blocking=True)
                 
-                optimizer.zero_grad(set_to_none=True)
+                if not has_deepspeed:
+                    optimizer.zero_grad(set_to_none=True)
                 
                 # ── Policy forward passes ──────────────────────────────────
                 with bf16_autocast(enabled=self.config.bf16):
@@ -347,7 +417,7 @@ class DPOEngine:
                     combined_input = torch.cat([chosen_input, rejected_input], dim=0)
                     combined_labels = torch.cat([chosen_labels, rejected_labels], dim=0)
                     
-                    policy_outputs = self.policy(
+                    policy_outputs = policy_engine(
                         input_ids=combined_input,
                         labels=combined_labels,
                         return_aux_loss=False,
@@ -380,9 +450,15 @@ class DPOEngine:
                 
                 # Gradient accumulation
                 loss = loss / self.config.gradient_accumulation_steps
-                loss.backward()
                 
-                if (self._global_step + 1) % self.config.gradient_accumulation_steps == 0:
+                # Backward: DeepSpeed handles accumulation + grad sync internally
+                if has_deepspeed:
+                    policy_engine.backward(loss)
+                    policy_engine.step()
+                else:
+                    loss.backward()
+                
+                if not has_deepspeed and (self._global_step + 1) % self.config.gradient_accumulation_steps == 0:
                     grad_norm = clip_grad_norm_and_log(
                         self.policy.parameters(), self.config.grad_clip
                     )
@@ -429,7 +505,10 @@ class DPOEngine:
                 if self._global_step % self.config.save_every_n_steps == 0 and self.is_main:
                     ckpt_dir = Path(self.config.output_dir) / f"dpo_step{self._global_step}"
                     ckpt_dir.mkdir(parents=True, exist_ok=True)
-                    torch.save(self.policy.state_dict(), str(ckpt_dir / "model.pt"))
+                    if has_deepspeed and hasattr(policy_engine, "save_checkpoint"):
+                        policy_engine.save_checkpoint(str(ckpt_dir))
+                    else:
+                        torch.save(self.policy.state_dict(), str(ckpt_dir / "model.pt"))
                     logger.info(f"DPO checkpoint saved: {ckpt_dir}")
                     # Upload checkpoint
                     upload_folder_async(str(ckpt_dir), repo_name="forge-3b-dpo", folder_in_repo=ckpt_dir.name)
