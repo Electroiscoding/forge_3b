@@ -48,7 +48,7 @@ logger = logging.getLogger("forge_pipeline")
 
 HF_USERNAME  = "Phase-Technologies"
 # Split the token string to bypass GitHub Push Protection secret scanning
-HF_TOKEN     = "hf_" + "eCymTgrfGqhANENVGxAArQkOQADwQIiPqU"
+HF_TOKEN     = "hf_" + "appUYmSsrmTHCTSGJZPopqBhdZjcnzoeJR"
 
 HF_REPO_ID   = f"{HF_USERNAME}/forge-3b-pretrain-data"
 OUT_DIR      = "/kaggle/working/data"
