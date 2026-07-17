@@ -20,6 +20,12 @@ import argparse
 import datetime
 from pathlib import Path
 
+# ── FORGE_NO_TRITON: must be set BEFORE any model imports ────────────────────
+# Check for --no_triton early (before argparse, before torch) so the env var
+# is visible to triton_kernels.py at import time.
+if "--no_triton" in sys.argv:
+    os.environ["FORGE_NO_TRITON"] = "1"
+
 import torch
 import torch.nn as nn
 
@@ -71,7 +77,11 @@ def parse_args():
     # GPU
     parser.add_argument("--num_gpus", type=int, default=16)
     parser.add_argument("--bf16", action="store_true", default=True)
-    parser.add_argument("--no_compile", action="store_true")
+    parser.add_argument("--no_compile", action="store_true",
+                        help="Disable torch.compile (required for PyTorch<2.5 / Triton bugs)")
+    parser.add_argument("--no_triton", action="store_true",
+                        help="Disable custom Triton kernels; fall back to PyTorch ops. "
+                             "Eliminates JIT compilation wait on first step.")
     parser.add_argument("--deepspeed_config", type=str, default="./configs/ds_zero3.json")
     parser.add_argument("--no_gradient_checkpointing", action="store_true")
     
