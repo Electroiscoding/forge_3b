@@ -59,7 +59,13 @@ def parse_args():
     parser.add_argument("--phase2_tokens", type=int, default=43_000_000_000)
     parser.add_argument("--phase3_tokens", type=int, default=2_000_000_000)
     parser.add_argument("--lr_max", type=float, default=3e-4)
-    parser.add_argument("--batch_tokens", type=int, default=2_000_000)
+    parser.add_argument("--batch_tokens", type=int, default=2_000_000,
+                        help="Phase 2 global batch size in tokens (default: 2M for 16 GPUs)")
+    parser.add_argument("--phase1_batch_tokens", type=int, default=None,
+                        help="Phase 1 global batch tokens. Defaults to batch_tokens/2. "
+                             "For 1 GPU use ~65536; for 16 GPUs use ~1000000.")
+    parser.add_argument("--phase3_batch_tokens", type=int, default=None,
+                        help="Phase 3 global batch tokens. Defaults to batch_tokens/2.")
     parser.add_argument("--micro_batch_per_gpu", type=int, default=2)
     
     # GPU
@@ -113,6 +119,18 @@ def main():
     if args.no_gradient_checkpointing:
         model_config.use_gradient_checkpointing = False
     
+    # Auto-scale phase1/3 batch tokens if not explicitly set
+    _phase2_batch = args.batch_tokens
+    _phase1_batch = args.phase1_batch_tokens if args.phase1_batch_tokens is not None else max(
+        args.micro_batch_per_gpu * 512 * world_size,   # minimum: 1 grad-accum step
+        _phase2_batch // 2 // world_size * world_size  # scale by GPU count
+    )
+    _phase3_batch = args.phase3_batch_tokens if args.phase3_batch_tokens is not None else max(
+        args.micro_batch_per_gpu * 4096 * world_size,
+        _phase2_batch // 2 // world_size * world_size
+    )
+    logger.info(f"Batch tokens — Phase1: {_phase1_batch:,} | Phase2: {_phase2_batch:,} | Phase3: {_phase3_batch:,}")
+
     train_config = PretrainConfig(
         output_dir=args.output_dir,
         data_dir=args.data_dir,
@@ -121,7 +139,9 @@ def main():
         phase2_tokens=args.phase2_tokens,
         phase3_tokens=args.phase3_tokens,
         lr_max=args.lr_max,
-        phase2_global_batch_tokens=args.batch_tokens,
+        phase1_global_batch_tokens=_phase1_batch,
+        phase2_global_batch_tokens=_phase2_batch,
+        phase3_global_batch_tokens=_phase3_batch,
         micro_batch_size_per_gpu=args.micro_batch_per_gpu,
         num_gpus=world_size,
         bf16=args.bf16,
