@@ -18,7 +18,8 @@
       "device": "cpu",
       "pin_memory": true,
       "fast_init": true
-    }
+    },
+    "zero_force_ds_cpu_optimizer": false
   },
   "bf16": {
     "enabled": true
