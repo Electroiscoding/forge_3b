@@ -363,7 +363,7 @@ class ForgeModel(nn.Module):
                 
                 h, aux = checkpoint(
                     _forward_layer, h,
-                    use_reentrant=False,  # modern API
+                    use_reentrant=True,   # standard stable checkpointing for MoE
                     preserve_rng_state=True,
                 )
             else:
