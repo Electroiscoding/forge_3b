@@ -239,7 +239,7 @@ class PretrainConfig:
     compile_mode: str = "max-autotune"
     
     # ── Data ──────────────────────────────────────────────────────────────────
-    num_dataloader_workers: int = 8
+    num_dataloader_workers: int = 0
     prefetch_factor: int = 4
     seed: int = 42
     
