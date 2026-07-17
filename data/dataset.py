@@ -32,26 +32,68 @@ except Exception as e:
 
 def resolve_data_dir(data_dir: str) -> str:
     """
-    If data_dir is a Hugging Face dataset repository (e.g. Phase-Technologies/...),
-    download it using snapshot_download and return the local cache path.
-    This ensures data is pulled when the training pod/cluster starts.
+    Resolve a data_dir argument to a local filesystem path.
+
+    Accepts:
+      - Local path             : "/workspace/data/tokenized"
+      - HF repo ID             : "Phase-Technologies/forge-3b-pretrain-data"
+      - HF repo ID (sft)       : "Phase-Technologies/forge-3b-sft-data"
+      - HF repo ID (dpo)       : "Phase-Technologies/forge-3b-dpo-data"
+      - hf:// prefix           : "hf://Phase-Technologies/forge-3b-pretrain-data"
+
+    If data_dir looks like an HF repo ID (contains '/' but is not a local path),
+    snapshot_download is called and the local cache path is returned.
+    The HF token from hub_uploader is used automatically.
     """
+    # Strip hf:// scheme if present
     if data_dir.startswith("hf://"):
         data_dir = data_dir[5:]
-        
-    if data_dir.startswith("Phase-Technologies/"):
+
+    # Detect HF repo ID: contains exactly one '/' and is NOT an existing local path
+    # e.g. "Phase-Technologies/forge-3b-pretrain-data" vs "/workspace/data/tokenized"
+    is_hf_repo = (
+        "/" in data_dir
+        and not data_dir.startswith("/")
+        and not data_dir.startswith("./")
+        and not data_dir.startswith("../")
+        and not Path(data_dir).exists()
+    )
+
+    if is_hf_repo:
         try:
             from huggingface_hub import snapshot_download
-            logger.info(f"Resolving Hugging Face dataset from hub: {data_dir}")
-            return snapshot_download(
-                repo_id=data_dir, 
+
+            # Reuse the same token that hub_uploader uses for uploads
+            try:
+                from training.hub_uploader import HF_TOKEN
+                token = HF_TOKEN
+            except ImportError:
+                token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+
+            logger.info(
+                f"Resolving HuggingFace dataset repo: '{data_dir}' "
+                f"(token={'set' if token else 'not set — public repos only'})"
+            )
+            local_path = snapshot_download(
+                repo_id=data_dir,
                 repo_type="dataset",
+                token=token,
                 resume_download=True,
             )
+            logger.info(f"Dataset cached at: {local_path}")
+            return local_path
+
         except ImportError:
-            logger.error("huggingface_hub is not installed. Cannot download dataset.")
+            logger.error("huggingface_hub is not installed. Run: pip install huggingface_hub")
             raise
-    
+        except Exception as e:
+            logger.error(
+                f"Failed to download dataset '{data_dir}' from HuggingFace Hub: {e}\n"
+                f"If this is a private repo, ensure the HF token in "
+                f"training/hub_uploader.py is valid, or set the HF_TOKEN env var."
+            )
+            raise
+
     return data_dir
 
 
