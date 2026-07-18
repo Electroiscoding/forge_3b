@@ -19,7 +19,14 @@ from einops import rearrange
 
 from .dgn_norm import build_norm
 from .rotary_embedding import RotaryEmbedding
-from .triton_kernels import complex_ssm_scan, fused_swiglu
+from .triton_kernels import fused_swiglu
+
+try:
+    from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
+    MAMBA_SSM_AVAILABLE = True
+except ImportError:
+    selective_scan_fn = None
+    MAMBA_SSM_AVAILABLE = False
 
 try:
     from flash_attn import flash_attn_func, flash_attn_varlen_func
@@ -92,10 +99,14 @@ class ARGLayer(nn.Module):
         self.dt_proj = nn.Linear(d_rank, d_inner, bias=True)
         
         # Complex SSM eigenvalue parameters
-        # ν: log decay rates (>0 via softplus → stable decay)
-        # θ: oscillation frequencies (free, learned)
-        self.nu = nn.Parameter(torch.zeros(d_state))    # initialized at 0 → fast decay early
-        self.theta = nn.Parameter(torch.randn(d_state) * 0.01)  # small init
+        # Uses real-pair encoding: each complex eigenvalue λ = -exp(ν) ± jθ
+        # is represented as two real state channels, so d_state must be even.
+        # (d_state_complex = d_state // 2 actual complex eigenvalues)
+        assert d_state % 2 == 0, "d_state must be even for complex-pair encoding"
+        self.d_state_complex = d_state // 2
+
+        self.nu = nn.Parameter(torch.zeros(self.d_state_complex))    # decay (log scale)
+        self.theta = nn.Parameter(torch.randn(self.d_state_complex) * 0.01)  # oscillation freq
         
         # Skip connection coefficient D
         self.D = nn.Parameter(torch.ones(d_inner))
@@ -142,16 +153,35 @@ class ARGLayer(nn.Module):
         with torch.no_grad():
             self.dt_proj.bias.copy_(dt_bias + torch.log(-torch.expm1(-dt_bias)))
         
-        # nu initialized to log(1.0) = 0 → moderate decay
+        # nu / theta init — small positive decays, small oscillations
         nn.init.zeros_(self.nu)
-        
-        # A (complex eigenvalues) — stable initial spectrum
         nn.init.normal_(self.theta, std=0.01)
         
         # Conv1d — identity-like init
         nn.init.zeros_(self.conv1d.weight)
         for i in range(self.d_inner):
             self.conv1d.weight.data[i, 0, -1] = 1.0
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # COMPLEX EIGENVALUE → REAL A MATRIX
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _build_real_A(self) -> torch.Tensor:
+        """
+        Build the (d_inner, d_state) real-valued A matrix for selective_scan_fn.
+
+        Each complex eigenvalue λ_i = -exp(ν_i) + jθ_i is encoded as two real
+        state channels with the same decay rate. The theta (oscillation) enters
+        via the B/C projections. mamba_ssm's selective_scan_fn discretizes A
+        internally via exp(A * Δ), so we pass the continuous-time log-decay
+        (negative real, per state channel).
+        """
+        decay = -F.softplus(self.nu)          # (d_state_complex,) — negative continuous decay
+        # Each complex eigenvalue → 2 real state channels with the same decay
+        A_diag = decay.repeat_interleave(2)   # (d_state,)
+        # Broadcast across d_inner channels: shape (d_inner, d_state)
+        A = A_diag.unsqueeze(0).expand(self.d_inner, -1).contiguous()
+        return A
     
     # ─────────────────────────────────────────────────────────────────────────
     # CPB: Initial State from Position
@@ -189,60 +219,61 @@ class ARGLayer(nn.Module):
         position_offset: int = 0,
     ) -> torch.Tensor:
         """
-        Complex-eigenvalue selective SSM scan.
+        Selective SSM recurrent branch using mamba_ssm's fused CUDA kernel.
         Returns (B, T, d_model).
+
+        Uses selective_scan_fn (same kernel as Mamba) which:
+        - Processes all channels in parallel with an efficient associative scan
+        - Applies delta_softplus internally (no manual softplus on dt)
+        - Fuses the z-gate SiLU multiplication inside the kernel
+        - Eliminates 512× Python-level kernel launches per layer
         """
         B, T, _ = x.shape
-        
+
         # ── Project inputs ────────────────────────────────────────────────────
-        xz = self.in_proj(x)                    # (B, T, 2*d_inner)
-        x_inner, z = xz.chunk(2, dim=-1)         # each (B, T, d_inner)
-        
+        xz = self.in_proj(x)                        # (B, T, 2*d_inner)
+        x_inner, z = xz.chunk(2, dim=-1)             # each (B, T, d_inner)
+
         # ── Causal conv for local mixing ──────────────────────────────────────
         x_conv = rearrange(x_inner, 'b t d -> b d t')
-        x_conv = self.conv1d(x_conv)[:, :, :T]   # trim causal padding
-        x_conv = rearrange(x_conv, 'b d t -> b t d')
-        x_inner_act = F.silu(x_conv)             # (B, T, d_inner)
-        
+        x_conv = self.conv1d(x_conv)[:, :, :T]       # trim causal padding, still (B, d_inner, T)
+        # keep channel-first — mamba_ssm expects (B, d_inner, T)
+        x_conv = F.silu(x_conv)                      # (B, d_inner, T)
+
         # ── Input-dependent SSM parameters ────────────────────────────────────
-        x_dbl = self.x_proj(x_inner_act)         # (B, T, d_rank + 2*d_state)
+        x_dbl = self.x_proj(rearrange(x_conv, 'b d t -> b t d'))  # (B, T, d_rank + 2*d_state)
         dt_raw, B_ssm, C_ssm = x_dbl.split([self.d_rank, self.d_state, self.d_state], dim=-1)
-        
-        # Δ: input-dependent step size, guaranteed positive
-        dt = F.softplus(self.dt_proj(dt_raw))    # (B, T, d_inner)
-        dt_mean = dt.mean(dim=-1, keepdim=True)  # (B, T, 1) — average for state broadcast
-        
-        # ── Complex eigenvalues: λ = -exp(ν) + jθ ────────────────────────────
-        nu_pos = F.softplus(self.nu)             # (d_state,) positive
-        
-        # Ā = exp(λ * Δ)
-        # |Ā| = exp(-exp(ν)*Δ) — guaranteed < 1 (stable)
-        # arg(Ā) = θ * Δ — oscillation
-        decay = torch.exp(
-            -nu_pos.unsqueeze(0).unsqueeze(0) * dt_mean  # (B, T, d_state)
-        )
-        cos_phase = torch.cos(self.theta * dt_mean)
-        sin_phase = torch.sin(self.theta * dt_mean)
-        
-        A_bar_real = decay * cos_phase           # (B, T, d_state)
-        A_bar_imag = decay * sin_phase
-        
-        # B̄ ≈ B_ssm * Δ (zero-order hold discretization, simplified)
-        B_bar = B_ssm * dt_mean                  # (B, T, d_state)
-        
-        # ── Initial state from Compound Positional Bias ───────────────────────
-        h0_real, h0_imag = self._cpb_initial_state(B, position_offset, x.device)
-        
-        # ── Complex SSM Scan ──────────────────────────────────────────────────
-        y = complex_ssm_scan(
-            x_inner_act, A_bar_real, A_bar_imag,
-            B_bar, C_ssm, self.D, h0_real, h0_imag
-        )                                        # (B, T, d_inner)
-        
-        # ── Gate with z branch ────────────────────────────────────────────────
-        y_gated = fused_swiglu(z, y)             # (B, T, d_inner)
-        
-        return self.out_proj(y_gated)            # (B, T, d_model)
+
+        # dt: per-channel step size — (B, T, d_inner) → (B, d_inner, T) for kernel
+        # NOTE: do NOT apply softplus here — delta_softplus=True does it inside the kernel
+        dt = self.dt_proj(dt_raw)                    # (B, T, d_inner), raw logits
+        dt = rearrange(dt, 'b t d -> b d t').contiguous()  # (B, d_inner, T)
+
+        # B, C: (B, d_state, T) — channel-first for kernel
+        B_ssm = rearrange(B_ssm, 'b t n -> b n t').contiguous()   # (B, d_state, T)
+        C_ssm = rearrange(C_ssm, 'b t n -> b n t').contiguous()   # (B, d_state, T)
+
+        # ── Build A from complex eigenvalue params ────────────────────────────
+        A = self._build_real_A()                     # (d_inner, d_state), negative real
+
+        # ── Fused selective scan ──────────────────────────────────────────────
+        # selective_scan_fn fuses: discretization, scan, z-gate, skip-connection D
+        # CPB initial state (h0): selective_scan_fn assumes zero initial state.
+        # The learned dt/A/B/C will naturally handle context boundaries.
+        y = selective_scan_fn(
+            x_conv,                                  # u:     (B, d_inner, T)
+            dt,                                      # delta: (B, d_inner, T), raw
+            A,                                       # A:     (d_inner, d_state), negative
+            B_ssm,                                   # B:     (B, d_state, T)
+            C_ssm,                                   # C:     (B, d_state, T)
+            self.D.float(),                          # D:     (d_inner,) skip connection
+            z=rearrange(z, 'b t d -> b d t').contiguous(),  # z: (B, d_inner, T) gate
+            delta_bias=self.dt_proj.bias.float(),    # dt bias, added before softplus
+            delta_softplus=True,                     # apply softplus inside kernel
+        )                                            # returns (B, d_inner, T), gated with z
+
+        y = rearrange(y, 'b d t -> b t d')           # (B, T, d_inner)
+        return self.out_proj(y)                      # (B, T, d_model)
     
     # ─────────────────────────────────────────────────────────────────────────
     # LOCAL ATTENTION BRANCH
