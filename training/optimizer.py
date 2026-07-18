@@ -24,6 +24,7 @@ def build_optimizer(
     ssm_lr_mult: float = 0.3,
     router_lr_mult: float = 0.5,
     use_fused: bool = True,
+    deepspeed_config_path: Optional[str] = None,
 ) -> torch.optim.Optimizer:
     """
     Build AdamW optimizer with parameter-group-specific learning rates.
@@ -136,25 +137,59 @@ def build_optimizer(
         logger.info(f"Optimizer group '{g['name']}': {n/1e6:.1f}M params, "
                     f"lr={g['lr']:.2e}, wd={g['weight_decay']}")
     
-    # Use fused Adam if available (torch 2.x — 30-50% faster than standard)
-    try:
-        if use_fused and torch.cuda.is_available():
+    # Detect if CPU offloading is enabled in the DeepSpeed config
+    offload_to_cpu = False
+    if deepspeed_config_path:
+        try:
+            import json
+            import os
+            if os.path.exists(deepspeed_config_path):
+                with open(deepspeed_config_path) as f:
+                    ds_config = json.load(f)
+                zero_opt = ds_config.get("zero_optimization", {})
+                offload_opt = zero_opt.get("offload_optimizer", {})
+                if offload_opt and offload_opt.get("device") == "cpu":
+                    offload_to_cpu = True
+        except Exception as e:
+            logger.warning(f"Could not parse DeepSpeed config to check for optimizer offloading: {e}")
+
+    # Instantiate optimizer based on CPU offload configuration
+    if offload_to_cpu:
+        try:
+            from deepspeed.ops.adam import DeepSpeedCPUAdam
+            optimizer = DeepSpeedCPUAdam(
+                param_groups,
+                betas=(beta1, beta2),
+                eps=eps,
+            )
+            logger.info("Using DeepSpeedCPUAdam for CPU offloading (high-performance AVX/C++)")
+        except Exception as e:
+            logger.warning(f"Failed to load DeepSpeedCPUAdam ({e}), falling back to standard PyTorch AdamW on CPU")
             optimizer = torch.optim.AdamW(
                 param_groups,
                 betas=(beta1, beta2),
                 eps=eps,
-                fused=True,   # CUDA-fused implementation
             )
-            logger.info("Using fused AdamW (CUDA native)")
-        else:
-            raise ImportError("fused not enabled")
-    except (TypeError, ImportError):
-        optimizer = torch.optim.AdamW(
-            param_groups,
-            betas=(beta1, beta2),
-            eps=eps,
-        )
-        logger.info("Using standard AdamW")
+    else:
+        # Use fused Adam if available on GPU (torch 2.x — 30-50% faster than standard)
+        try:
+            if use_fused and torch.cuda.is_available():
+                optimizer = torch.optim.AdamW(
+                    param_groups,
+                    betas=(beta1, beta2),
+                    eps=eps,
+                    fused=True,   # CUDA-fused implementation
+                )
+                logger.info("Using fused AdamW (CUDA native)")
+            else:
+                raise ImportError("fused not enabled")
+        except (TypeError, ImportError):
+            optimizer = torch.optim.AdamW(
+                param_groups,
+                betas=(beta1, beta2),
+                eps=eps,
+            )
+            logger.info("Using standard AdamW")
     
     return optimizer
 

@@ -344,6 +344,7 @@ def main():
         ssm_lr_mult=1.0,
         router_lr_mult=1.0,
         use_fused=True,
+        deepspeed_config_path=args.deepspeed_config,
     )
 
     # ── LR Scheduler — cosine: lr_max → lr_min over total_tokens ─────────────

@@ -491,6 +491,7 @@ def main():
         ssm_lr_mult=train_config.ssm_lr_mult,
         router_lr_mult=train_config.router_lr_mult,
         use_fused=True,   # CUDA-fused AdamW — 30-50% faster on H100
+        deepspeed_config_path=train_config.deepspeed_config,
     )
 
     # Per-group learning-rate multipliers for the scheduler (mirrors optimizer groups)

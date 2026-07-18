@@ -347,6 +347,7 @@ def main():
         ssm_lr_mult=1.0,
         router_lr_mult=1.0,
         use_fused=True,
+        deepspeed_config_path=args.deepspeed_config,
     )
 
     # ── LR Scheduler (constant for DPO — very low LR to prevent collapse) ────
