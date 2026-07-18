@@ -299,18 +299,89 @@ def fused_swiglu(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+@torch.jit.script
+def _ssm_forward_scan(
+    ar: torch.Tensor,     # (B, T, d_state) float32
+    ai: torch.Tensor,     # (B, T, d_state)
+    bx: torch.Tensor,     # (B, T, d_state) = B_bar * x_inner[:,:,:d_state]
+    h0_real: torch.Tensor,  # (B, d_state)
+    h0_imag: torch.Tensor,  # (B, d_state)
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """TorchScript-compiled sequential SSM scan — zero Python overhead per step."""
+    B = ar.size(0)
+    T = ar.size(1)
+    d_state = ar.size(2)
+    h_real = torch.empty(B, T + 1, d_state, dtype=ar.dtype, device=ar.device)
+    h_imag = torch.empty(B, T + 1, d_state, dtype=ar.dtype, device=ar.device)
+    h_real[:, 0] = h0_real
+    h_imag[:, 0] = h0_imag
+    for t in range(T):
+        hr = h_real[:, t]
+        hi = h_imag[:, t]
+        art = ar[:, t]
+        ait = ai[:, t]
+        h_real[:, t + 1] = art * hr - ait * hi + bx[:, t]
+        h_imag[:, t + 1] = art * hi + ait * hr
+    return h_real, h_imag
+
+
+@torch.jit.script
+def _ssm_backward_scan(
+    ar: torch.Tensor,              # (B, T, d_state)
+    ai: torch.Tensor,              # (B, T, d_state)
+    bb: torch.Tensor,              # (B, T, d_state)
+    xi_slice: torch.Tensor,        # (B, T, d_state) — x_inner[:,:,:d_state]
+    cc: torch.Tensor,              # (B, T, d_state)
+    h_real: torch.Tensor,          # (B, T+1, d_state)
+    h_imag: torch.Tensor,          # (B, T+1, d_state)
+    go_scalar: torch.Tensor,       # (B, T)
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """TorchScript-compiled reverse accumulation backward — zero Python overhead per step."""
+    B = ar.size(0)
+    T = ar.size(1)
+    d_state = ar.size(2)
+
+    grad_hreal_from_y = go_scalar.unsqueeze(-1) * cc   # (B, T, d_state)
+
+    grad_ar      = torch.zeros_like(ar)
+    grad_ai      = torch.zeros_like(ai)
+    grad_bb      = torch.zeros_like(bb)
+    grad_xi_ssm  = torch.zeros_like(xi_slice)
+    delta_hr     = torch.zeros(B, d_state, dtype=ar.dtype, device=ar.device)
+    delta_hi     = torch.zeros(B, d_state, dtype=ar.dtype, device=ar.device)
+
+    for t in range(T - 1, -1, -1):
+        hr_t = h_real[:, t]
+        hi_t = h_imag[:, t]
+        art  = ar[:, t]
+        ait  = ai[:, t]
+
+        total_hr = grad_hreal_from_y[:, t] + delta_hr
+        total_hi = delta_hi
+
+        grad_ar[:, t] = total_hr * hr_t + total_hi * hi_t
+        grad_ai[:, t] = -total_hr * hi_t + total_hi * hr_t
+
+        grad_bx_t = total_hr
+        grad_bb[:, t]     = grad_bx_t * xi_slice[:, t]
+        grad_xi_ssm[:, t] = grad_bx_t * bb[:, t]
+
+        delta_hr = art * total_hr + ait * total_hi
+        delta_hi = -ait * total_hr + art * total_hi
+
+    grad_h0_real = delta_hr
+    grad_h0_imag = delta_hi
+    return grad_ar, grad_ai, grad_bb, grad_xi_ssm, grad_h0_real, grad_h0_imag
+
+
 class ComplexSSMScan(torch.autograd.Function):
     """
-    Fused complex SSM scan with analytic backward.
+    Fused complex SSM scan with TorchScript forward + analytic backward.
     
-    Forward:  h_t = A_t * h_{t-1} + B_t * x_t    (complex multiply)
-              y_t = Re(C_t * h_t) = C_t · h_real_t
-              output = y expanded to d_inner + D * x_inner  (skip)
-    
-    Backward: Analytically computed via reverse accumulation over saved states.
-              NO autograd graph through the loop — zero tensor allocations in scan.
+    Both the forward scan and backward accumulation loops run inside
+    @torch.jit.script functions — no Python interpreter overhead per timestep.
     """
-    
+
     @staticmethod
     def forward(ctx,
                 x_inner:   torch.Tensor,  # (B, T, d_inner)
@@ -325,48 +396,23 @@ class ComplexSSMScan(torch.autograd.Function):
         B, T, d_inner = x_inner.shape
         d_state = A_bar_real.shape[2]
         dtype = x_inner.dtype
-        dev = x_inner.device
 
-        # Work in float32 for numerical stability
         ar = A_bar_real.float()
         ai = A_bar_imag.float()
         bb = B_bar.float()
         cc = C.float()
         xi = x_inner.float()
-        
-        # Pre-compute Bx (only the d_state slice of x_inner is used for state update)
+        D_f = D.float()
+
         bx = bb * xi[:, :, :d_state]   # (B, T, d_state)
 
-        # Store all hidden states for the backward pass
-        # Shape (B, T+1, d_state) — h_states[:, 0] = h0, h_states[:, t+1] = h_t
-        h_real = torch.empty(B, T + 1, d_state, dtype=torch.float32, device=dev)
-        h_imag = torch.empty(B, T + 1, d_state, dtype=torch.float32, device=dev)
-        h_real[:, 0] = h0_real.float()
-        h_imag[:, 0] = h0_imag.float()
+        # TorchScript-compiled forward scan — no Python loop overhead
+        h_real, h_imag = _ssm_forward_scan(ar, ai, bx, h0_real.float(), h0_imag.float())
 
-        # Sequential forward scan  (O(T) FLOPS, single pass, in-place)
-        for t in range(T):
-            hr = h_real[:, t]
-            hi = h_imag[:, t]
-            art = ar[:, t]
-            ait = ai[:, t]
-            # h_{t+1} = A_t * h_t + B_t * x_t
-            h_real[:, t + 1] = art * hr - ait * hi + bx[:, t]
-            h_imag[:, t + 1] = art * hi + ait * hr
-
-        # y_t = (C_t · h_real_t)  ← scalar per (B, t), broadcast to d_inner
         y_ssm = (cc * h_real[:, 1:]).sum(-1, keepdim=True)  # (B, T, 1)
-        y_ssm = y_ssm.expand(B, T, d_inner)
+        y = y_ssm.expand(B, T, d_inner) + D_f.unsqueeze(0).unsqueeze(0) * xi
 
-        # Skip connection
-        D_f = D.float()
-        y = y_ssm + D_f.unsqueeze(0).unsqueeze(0) * xi   # (B, T, d_inner)
-
-        ctx.save_for_backward(
-            ar, ai, bb, cc, xi, D_f,
-            h_real,   # (B, T+1, d_state)  saved states
-            h_imag,
-        )
+        ctx.save_for_backward(ar, ai, bb, cc, xi, D_f, h_real, h_imag)
         ctx.input_dtype = dtype
         ctx.d_state = d_state
         return y.to(dtype)
@@ -376,67 +422,20 @@ class ComplexSSMScan(torch.autograd.Function):
         ar, ai, bb, cc, xi, D_f, h_real, h_imag = ctx.saved_tensors
         B, T, d_inner = grad_output.shape
         d_state = ctx.d_state
-        go = grad_output.float()    # (B, T, d_inner)
+        go = grad_output.float()
 
-        # ── Skip connection grads ─────────────────────────────────────────────
-        grad_D   = (go * xi).sum([0, 1])                   # (d_inner,)
-        grad_xi  = go * D_f.unsqueeze(0).unsqueeze(0)      # (B, T, d_inner)
+        grad_D  = (go * xi).sum([0, 1])
+        grad_xi = go * D_f.unsqueeze(0).unsqueeze(0)
 
-        # ── y = C · h_real broadcast to d_inner ──────────────────────────────
-        # dL/d(C_t · h_real_t) = go_t.sum(d_inner dim, since it was expanded)
-        go_scalar = go.sum(-1)      # (B, T)  — collapse the broadcast dimension
-
+        go_scalar = go.sum(-1)          # (B, T)
         grad_C    = go_scalar.unsqueeze(-1) * h_real[:, 1:]  # (B, T, d_state)
-        grad_hreal_from_y = go_scalar.unsqueeze(-1) * cc      # (B, T, d_state)
 
-        # ── Reverse accumulation through scan ─────────────────────────────────
-        grad_ar   = torch.zeros_like(ar)
-        grad_ai   = torch.zeros_like(ai)
-        grad_bb   = torch.zeros_like(bb)
-        grad_xi_ssm = torch.zeros(B, T, d_state, dtype=torch.float32, device=grad_output.device)
-        grad_h0_real = torch.zeros(B, d_state, dtype=torch.float32, device=grad_output.device)
-        grad_h0_imag = torch.zeros(B, d_state, dtype=torch.float32, device=grad_output.device)
+        xi_slice = xi[:, :, :d_state]
 
-        # grad_h_real[t], grad_h_imag[t] accumulate loss through h_{t+1} → h_t chain
-        delta_hr = torch.zeros(B, d_state, dtype=torch.float32, device=grad_output.device)
-        delta_hi = torch.zeros(B, d_state, dtype=torch.float32, device=grad_output.device)
+        # TorchScript-compiled backward scan — no Python loop overhead
+        grad_ar, grad_ai, grad_bb, grad_xi_ssm, grad_h0_real, grad_h0_imag = \
+            _ssm_backward_scan(ar, ai, bb, xi_slice, cc, h_real, h_imag, go_scalar)
 
-        for t in range(T - 1, -1, -1):
-            hr_t  = h_real[:, t]    # h_{t}   (before this step)
-            hi_t  = h_imag[:, t]
-            art   = ar[:, t]
-            ait   = ai[:, t]
-
-            # Total gradient on h_real[:, t+1] = from y_t + from future steps
-            total_hr = grad_hreal_from_y[:, t] + delta_hr
-            total_hi = delta_hi   # h_imag doesn't feed into y directly
-
-            # Grad w.r.t. A_bar_real[t], A_bar_imag[t]
-            #   h_real_{t+1} = ar * hr_t - ai * hi_t + bx_t
-            #   h_imag_{t+1} = ar * hi_t + ai * hr_t
-            grad_ar[:, t] = (total_hr * hr_t + total_hi * hi_t)
-            grad_ai[:, t] = (-total_hr * hi_t + total_hi * hr_t)
-
-            # Grad w.r.t. bx_t  (= B_bar_t * xi_t[:d_state])
-            grad_bx_t = total_hr   # ∂h_real_{t+1}/∂bx_t = 1
-
-            grad_bb[:, t] = grad_bx_t * xi[:, t, :d_state]
-            grad_xi_ssm[:, t] = grad_bx_t * bb[:, t]
-
-            # Propagate grad back to h_t via A_t transpose
-            #   h_real_{t+1} = ar * hr - ai * hi + bx
-            #   ∂h_real_{t+1}/∂hr = ar,  ∂h_real_{t+1}/∂hi = -ai
-            #   h_imag_{t+1} = ar * hi + ai * hr
-            #   ∂h_imag_{t+1}/∂hr = ai,  ∂h_imag_{t+1}/∂hi = ar
-            delta_hr = art * total_hr + ait * total_hi
-            delta_hi = -ait * total_hr + art * total_hi
-
-        # delta_hr/hi after the loop = grad w.r.t. h0
-        grad_h0_real = delta_hr
-        grad_h0_imag = delta_hi
-
-        # ── Assemble full x_inner gradient ───────────────────────────────────
-        # The SSM branch only touches x_inner[:, :, :d_state]
         grad_xi[:, :, :d_state] = grad_xi[:, :, :d_state] + grad_xi_ssm
 
         dtype = ctx.input_dtype
@@ -454,5 +453,5 @@ class ComplexSSMScan(torch.autograd.Function):
 
 # Export
 def complex_ssm_scan(x_inner, A_bar_real, A_bar_imag, B_bar, C, D, h0_real, h0_imag):
-    """Main entry point for complex SSM scan. Uses fused forward + analytic backward."""
+    """Main entry point for complex SSM scan."""
     return ComplexSSMScan.apply(x_inner, A_bar_real, A_bar_imag, B_bar, C, D, h0_real, h0_imag)
