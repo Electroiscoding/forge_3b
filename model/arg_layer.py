@@ -101,12 +101,11 @@ class ARGLayer(nn.Module):
         # Complex SSM eigenvalue parameters
         # Uses real-pair encoding: each complex eigenvalue λ = -exp(ν) ± jθ
         # is represented as two real state channels, so d_state must be even.
-        # (d_state_complex = d_state // 2 actual complex eigenvalues)
+        # theta (oscillation) is implicitly learned through B/C projections.
         assert d_state % 2 == 0, "d_state must be even for complex-pair encoding"
         self.d_state_complex = d_state // 2
 
         self.nu = nn.Parameter(torch.zeros(self.d_state_complex))    # decay (log scale)
-        self.theta = nn.Parameter(torch.randn(self.d_state_complex) * 0.01)  # oscillation freq
         
         # Skip connection coefficient D
         self.D = nn.Parameter(torch.ones(d_inner))
@@ -153,9 +152,8 @@ class ARGLayer(nn.Module):
         with torch.no_grad():
             self.dt_proj.bias.copy_(dt_bias + torch.log(-torch.expm1(-dt_bias)))
         
-        # nu / theta init — small positive decays, small oscillations
+        # nu init — zero → moderate decay at start
         nn.init.zeros_(self.nu)
-        nn.init.normal_(self.theta, std=0.01)
         
         # Conv1d — identity-like init
         nn.init.zeros_(self.conv1d.weight)

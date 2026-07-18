@@ -41,11 +41,18 @@ loss.backward()
 print(f"  Loss         : {loss.item():.6f}")
 print(f"  nu.grad      : {layer.seq_mixer.nu.grad if hasattr(layer, 'seq_mixer') else layer.nu.grad}")
 
-# Check grads exist
-for name, p in layer.named_parameters():
-    if p.requires_grad:
-        assert p.grad is not None, f"No grad for {name}"
-        assert not torch.isnan(p.grad).any(), f"NaN grad for {name}"
+# Verify all params got gradients
+no_grad = [name for name, p in layer.named_parameters() if p.requires_grad and p.grad is None]
+nan_grad = [name for name, p in layer.named_parameters() if p.requires_grad and p.grad is not None and torch.isnan(p.grad).any()]
+
+if no_grad:
+    print(f"  ⚠ Params with no grad: {no_grad}")
+if nan_grad:
+    print(f"  ✗ Params with NaN grad: {nan_grad}")
+    raise RuntimeError("NaN gradients detected")
+
+if no_grad:
+    raise AssertionError(f"These params have no gradient (unused in forward): {no_grad}")
 
 print()
 print("✓ SMOKE TEST PASSED — mamba_ssm selective_scan_fn works correctly in bf16 model")
