@@ -171,35 +171,25 @@ def build_optimizer(
                 eps=eps,
             )
     else:
-        # Try using 8-bit AdamW from bitsandbytes to keep optimizer memory within GPU limits (saves ~23GB)
+        # Use fused Adam if available on GPU (torch 2.x — 30-50% faster than standard)
         try:
-            from bitsandbytes.optim import AdamW8bit
-            optimizer = AdamW8bit(
-                param_groups,
-                betas=(beta1, beta2),
-                eps=eps,
-            )
-            logger.info("Using 8-bit AdamW (bitsandbytes) to fit states on GPU without OOM")
-        except ImportError:
-            # Fallback: Use fused Adam if available on GPU (torch 2.x — 30-50% faster than standard)
-            try:
-                if use_fused and torch.cuda.is_available():
-                    optimizer = torch.optim.AdamW(
-                        param_groups,
-                        betas=(beta1, beta2),
-                        eps=eps,
-                        fused=True,   # CUDA-fused implementation
-                    )
-                    logger.info("Using fused AdamW (CUDA native)")
-                else:
-                    raise ImportError("fused not enabled")
-            except (TypeError, ImportError):
+            if use_fused and torch.cuda.is_available():
                 optimizer = torch.optim.AdamW(
                     param_groups,
                     betas=(beta1, beta2),
                     eps=eps,
+                    fused=True,   # CUDA-fused implementation
                 )
-                logger.info("Using standard AdamW")
+                logger.info("Using fused AdamW (CUDA native)")
+            else:
+                raise ImportError("fused not enabled")
+        except (TypeError, ImportError):
+            optimizer = torch.optim.AdamW(
+                param_groups,
+                betas=(beta1, beta2),
+                eps=eps,
+            )
+            logger.info("Using standard AdamW")
     
     return optimizer
 
