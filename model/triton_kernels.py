@@ -381,25 +381,49 @@ def _complex_scan_pytorch(
     d_inner = x_inner.size(2)
     d_state = A_bar_real.size(2)
     
-    h_real = h0_real.clone()  # (B, d_state)
-    h_imag = h0_imag.clone()
+    # Bx is complex state input: only first d_state channels of x_inner are used
+    Bx_real = B_bar.float() * x_inner[:, :, :d_state].float()
+    Bx_imag = torch.zeros_like(Bx_real)
     
-    y = torch.empty((B, T, d_inner), dtype=x_inner.dtype, device=x_inner.device)
+    A_real = A_bar_real.float().clone()
+    A_imag = A_bar_imag.float().clone()
     
-    for t in range(T):
-        ar = A_bar_real[:, t]
-        ai = A_bar_imag[:, t]
+    # Initialize prefix state at t=0 with h0 contribution
+    # h_0 = A_0 * h0 + Bx_0
+    Bx_real[:, 0] += A_real[:, 0] * h0_real.float() - A_imag[:, 0] * h0_imag.float()
+    Bx_imag[:, 0] += A_real[:, 0] * h0_imag.float() + A_imag[:, 0] * h0_real.float()
+    
+    step = 1
+    while step < T:
+        A_left_real = A_real[:, :-step]
+        A_left_imag = A_imag[:, :-step]
+        B_left_real = Bx_real[:, :-step]
+        B_left_imag = Bx_imag[:, :-step]
         
-        # Complex state update: h = A * h + B * x
-        new_real = ar * h_real - ai * h_imag + B_bar[:, t] * x_inner[:, t, :d_state]
-        new_imag = ar * h_imag + ai * h_real
-        h_real = new_real
-        h_imag = new_imag
+        A_right_real = A_real[:, step:]
+        A_right_imag = A_imag[:, step:]
+        B_right_real = Bx_real[:, step:]
+        B_right_imag = Bx_imag[:, step:]
         
-        # y = Re(C* · h) = C * h_real
-        y_t = (C[:, t] * h_real).sum(-1, keepdim=True)  # (B, 1)
-        y[:, t] = y_t
+        # Combine B: B_right = A_right * B_left + B_right
+        new_Bx_real = (A_right_real * B_left_real - A_right_imag * B_left_imag) + B_right_real
+        new_Bx_imag = (A_right_real * B_left_imag + A_right_imag * B_left_real) + B_right_imag
         
+        # Combine A: A_right = A_right * A_left
+        new_A_real = A_right_real * A_left_real - A_right_imag * A_left_imag
+        new_A_imag = A_right_real * A_left_imag + A_right_imag * A_left_real
+        
+        # Assign to slices (safely avoid view aliasing)
+        Bx_real[:, step:] = new_Bx_real
+        Bx_imag[:, step:] = new_Bx_imag
+        A_real[:, step:] = new_A_real
+        A_imag[:, step:] = new_A_imag
+        
+        step *= 2
+        
+    y = (C.float() * Bx_real).sum(-1, keepdim=True)
+    y = y.expand(B, T, d_inner).to(x_inner.dtype)
+    
     # Skip connection
     y = y + D.unsqueeze(0).unsqueeze(0) * x_inner
     return y
