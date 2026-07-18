@@ -113,10 +113,6 @@ class ARGLayer(nn.Module):
         # Output projection
         self.out_proj = nn.Linear(d_inner, d_model, bias=False)
         
-        # ── Compound Positional Bias (CPB) ────────────────────────────────────
-        # Maps sinusoidal position encoding to SSM initial state
-        self.cpb_proj = nn.Linear(d_model, d_state, bias=False)
-        
         # ── Local Attention Branch ────────────────────────────────────────────
         q_dim = local_n_heads * head_dim
         kv_dim = local_n_kv_heads * head_dim
@@ -178,32 +174,6 @@ class ARGLayer(nn.Module):
         A_diag = decay.repeat_interleave(2)   # (d_state,)
         A = A_diag.unsqueeze(0).expand(self.d_inner, -1).contiguous().float()  # (d_inner, d_state), fp32
         return A
-    
-    # ─────────────────────────────────────────────────────────────────────────
-    # CPB: Initial State from Position
-    # ─────────────────────────────────────────────────────────────────────────
-    
-    def _sinusoidal_pe(self, position: int, device: torch.device) -> torch.Tensor:
-        """Sinusoidal position encoding vector for position 'position'."""
-        d = self.d_model
-        pos_tensor = torch.tensor(float(position), device=device, dtype=torch.float32)
-        i = torch.arange(0, d, 2, device=device, dtype=torch.float32)
-        denom = torch.pow(10000.0, i / d)
-        angles = pos_tensor / denom
-        pe = torch.zeros(d, device=device, dtype=torch.float32)
-        pe[0::2] = torch.sin(angles)
-        pe[1::2] = torch.cos(angles)
-        return pe
-    
-    def _cpb_initial_state(self, B: int, position_offset: int, 
-                             device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Compute initial SSM state from absolute position offset."""
-        sinpe = self._sinusoidal_pe(position_offset, device).to(dtype=self.cpb_proj.weight.dtype)
-        sinpe = sinpe.unsqueeze(0)  # (1, d_model) — ZeRO-3 linear backward requires a batch dim
-        h0 = torch.tanh(self.cpb_proj(sinpe))  # (1, d_state)
-        h0_real = h0.expand(B, -1)  # (B, d_state)
-        h0_imag = torch.zeros_like(h0_real)
-        return h0_real, h0_imag
     
     # ─────────────────────────────────────────────────────────────────────────
     # RECURRENT BRANCH
