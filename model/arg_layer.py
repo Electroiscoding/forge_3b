@@ -122,10 +122,10 @@ class ARGLayer(nn.Module):
         self.local_v = nn.Linear(d_model, kv_dim, bias=False)
         self.local_o = nn.Linear(q_dim, d_model, bias=False)
         
-        # Local RoPE (shorter max_seq_len since it's windowed)
+        # Local RoPE (initialize with safe maximum length of 8192 to avoid dynamic cache expansion during forward pass)
         self.local_rope = RotaryEmbedding(
             head_dim=head_dim,
-            max_seq_len=local_window * 4,
+            max_seq_len=max_seq_len * 2,
             base=rope_base,
         )
         

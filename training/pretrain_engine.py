@@ -444,8 +444,6 @@ class PretrainEngine:
         for layer in self.raw_model.layers:
             if isinstance(layer.seq_mixer, ARGLayer):
                 layer.seq_mixer.local_window = window_size
-                layer.seq_mixer.local_rope._cache_seq_len = 0
-                layer.seq_mixer.local_rope._build_cache(window_size * 4, self.device)
         logger.info(f"ARG local window updated to {window_size}")
 
     def _enable_yarn_scaling(self, factor: float = 2.0):
