@@ -192,8 +192,12 @@ class PackedTokenDataset(Dataset):
         local_idx = global_idx - self.cumulative_lengths[lo]
         file_path = self.file_paths[lo]
         
-        # Open memmap file briefly to read the required segment
-        arr = np.load(file_path, mmap_mode='r')
+        # Cache the mmap handle to avoid opening and parsing the header repeatedly
+        if not hasattr(self, "_mmap_cache"):
+            self._mmap_cache = {}
+        if file_path not in self._mmap_cache:
+            self._mmap_cache[file_path] = np.load(file_path, mmap_mode='r')
+        arr = self._mmap_cache[file_path]
         
         token_start = local_idx * self.seq_len
         token_end = token_start + self.seq_len
