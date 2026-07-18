@@ -1,0 +1,27 @@
+# 1. Prevent container disk overflow by redirecting temp files
+mkdir -p /workspace/tmp /workspace/cache
+export TMPDIR=/workspace/tmp
+export PIP_CACHE_DIR=/workspace/cache
+
+# 2. Update system and get tmux
+apt-get update && apt-get install -y tmux
+
+# 3. Pull code
+cd /workspace
+git clone https://github.com/Electroiscoding/forge_3b .
+
+# 4. Install correct PyTorch for H100 drivers
+pip install torch==2.4.1 torchvision==0.19.1 torchaudio==2.4.1 --index-url https://download.pytorch.org/whl/cu124 --force-reinstall
+
+# 5. Install stable transformers
+pip install transformers==4.41.2
+
+# 6. Install other requirements
+pip install datasets tokenizers wandb deepspeed einops accelerate bitsandbytes numpy triton xerv-crayon
+
+# 7. Install precompiled CUDA/SSM wheels (instant)
+pip install https://github.com/Dao-AILab/causal-conv1d/releases/download/v1.5.2/causal_conv1d-1.5.2+cu12torch2.4cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
+pip install https://github.com/state-spaces/mamba/releases/download/v2.2.4/mamba_ssm-2.2.4+cu12torch2.4cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
+
+# 8. Verify
+python -c "import torch; import causal_conv1d; import mamba_ssm; print('Setup completed successfully')"
