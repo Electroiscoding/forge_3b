@@ -190,8 +190,9 @@ class ARGLayer(nn.Module):
                              device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
         """Compute initial SSM state from absolute position offset."""
         sinpe = self._sinusoidal_pe(position_offset, device).to(dtype=self.cpb_proj.weight.dtype)
-        h0 = torch.tanh(self.cpb_proj(sinpe))  # (d_state,)
-        h0_real = h0.unsqueeze(0).expand(B, -1)  # (B, d_state)
+        sinpe = sinpe.unsqueeze(0)  # (1, d_model) — ZeRO-3 linear backward requires a batch dim
+        h0 = torch.tanh(self.cpb_proj(sinpe))  # (1, d_state)
+        h0_real = h0.expand(B, -1)  # (B, d_state)
         h0_imag = torch.zeros_like(h0_real)
         return h0_real, h0_imag
     
