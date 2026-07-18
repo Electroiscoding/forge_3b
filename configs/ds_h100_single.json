@@ -16,9 +16,11 @@
       "lr": 3e-4,
       "betas": [0.9, 0.95],
       "eps": 1e-8,
-      "weight_decay": 0.1
+      "weight_decay": 0.1,
+      "adam_w_mode": true
     }
   },
+  "zero_force_ds_cpu_optimizer": false,
   "gradient_clipping": 1.0,
   "train_micro_batch_size_per_gpu": 1,
   "gradient_accumulation_steps": "auto",
