@@ -269,12 +269,14 @@ def _compute_rstd_pytorch(x: torch.Tensor, G: int, Dg: int, eps: float) -> torch
     return 1.0 / rms
 
 
+@torch._dynamo.disable
 def fused_dgn(x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor,
                n_groups: int = 16, eps: float = 1e-6) -> torch.Tensor:
     """Entry point for fused DGN — uses Triton if available, else PyTorch."""
     return FusedDGN.apply(x, weight, bias, n_groups, eps)
 
 
+@torch._dynamo.disable
 def fused_swiglu(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
     """Fused SwiGLU: output = SiLU(gate) * up"""
     if TRITON_AVAILABLE and gate.is_cuda and gate.dtype == torch.bfloat16:
