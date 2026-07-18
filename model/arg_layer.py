@@ -176,11 +176,9 @@ class ARGLayer(nn.Module):
         internally via exp(A * Δ), so we pass the continuous-time log-decay
         (negative real, per state channel).
         """
-        decay = -F.softplus(self.nu)          # (d_state_complex,) — negative continuous decay
-        # Each complex eigenvalue → 2 real state channels with the same decay
+        decay = -F.softplus(self.nu.float())   # fp32 — mamba_ssm requires A in fp32
         A_diag = decay.repeat_interleave(2)   # (d_state,)
-        # Broadcast across d_inner channels: shape (d_inner, d_state)
-        A = A_diag.unsqueeze(0).expand(self.d_inner, -1).contiguous()
+        A = A_diag.unsqueeze(0).expand(self.d_inner, -1).contiguous().float()  # (d_inner, d_state), fp32
         return A
     
     # ─────────────────────────────────────────────────────────────────────────
