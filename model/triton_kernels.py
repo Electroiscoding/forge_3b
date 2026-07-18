@@ -389,9 +389,15 @@ def _complex_scan_pytorch(
     A_imag = A_bar_imag.float().clone()
     
     # Initialize prefix state at t=0 with h0 contribution
-    # h_0 = A_0 * h0 + Bx_0
-    Bx_real[:, 0] += A_real[:, 0] * h0_real.float() - A_imag[:, 0] * h0_imag.float()
-    Bx_imag[:, 0] += A_real[:, 0] * h0_imag.float() + A_imag[:, 0] * h0_real.float()
+    # We construct t0 separately and concatenate to avoid modifying Bx_real in-place
+    h0_contrib_real = A_real[:, 0:1] * h0_real.float().unsqueeze(1) - A_imag[:, 0:1] * h0_imag.float().unsqueeze(1)
+    h0_contrib_imag = A_real[:, 0:1] * h0_imag.float().unsqueeze(1) + A_imag[:, 0:1] * h0_real.float().unsqueeze(1)
+    
+    Bx_real_t0 = Bx_real[:, 0:1] + h0_contrib_real
+    Bx_imag_t0 = Bx_imag[:, 0:1] + h0_contrib_imag
+    
+    Bx_real = torch.cat([Bx_real_t0, Bx_real[:, 1:]], dim=1)
+    Bx_imag = torch.cat([Bx_imag_t0, Bx_imag[:, 1:]], dim=1)
     
     step = 1
     while step < T:
@@ -413,11 +419,11 @@ def _complex_scan_pytorch(
         new_A_real = A_right_real * A_left_real - A_right_imag * A_left_imag
         new_A_imag = A_right_real * A_left_imag + A_right_imag * A_left_real
         
-        # Assign to slices (safely avoid view aliasing)
-        Bx_real[:, step:] = new_Bx_real
-        Bx_imag[:, step:] = new_Bx_imag
-        A_real[:, step:] = new_A_real
-        A_imag[:, step:] = new_A_imag
+        # Assemble out-of-place via concatenation
+        Bx_real = torch.cat([Bx_real[:, :step], new_Bx_real], dim=1)
+        Bx_imag = torch.cat([Bx_imag[:, :step], new_Bx_imag], dim=1)
+        A_real = torch.cat([A_real[:, :step], new_A_real], dim=1)
+        A_imag = torch.cat([A_imag[:, :step], new_A_imag], dim=1)
         
         step *= 2
         
