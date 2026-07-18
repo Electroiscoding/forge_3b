@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """
-FORGE-3B Pretraining Entry Point.
+FORGE-3B Pretraining Entry Point — plain PyTorch DDP, no DeepSpeed.
 
-Usage (16× H100 on RunPod):
-    deepspeed --num_gpus=16 run_pretrain.py \
+Single GPU:
+    python run_pretrain.py \
+        --data_dir Phase-Technologies/forge-3b-pretrain-data \
+        --output_dir /workspace/checkpoints/forge_3b_pretrain \
+        --micro_batch_per_gpu 2 --num_gpus 1 --bf16 --no_compile --no_triton
+
+Multi-GPU (torchrun):
+    torchrun --nproc_per_node=16 run_pretrain.py \
         --data_dir /workspace/data/tokenized \
         --output_dir /workspace/checkpoints/forge_3b \
+        --micro_batch_per_gpu 2 --num_gpus 16 --bf16 \
         --wandb_project forge_3b_pretrain
-
-Single GPU testing:
-    python run_pretrain.py --data_dir Phase-Technologies/forge-3b-pretrain-data --output_dir ./ckpt --num_gpus 1
 """
 
 import os
@@ -28,9 +32,6 @@ if "--no_triton" in sys.argv:
 
 import torch
 import torch.nn as nn
-
-# No global class patches on nn.Module (which break torch.compile).
-# Instead, we call convert_to_attr_dict(model) post-construction.
 
 # ── Logging Setup ────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -82,7 +83,6 @@ def parse_args():
     parser.add_argument("--no_triton", action="store_true",
                         help="Disable custom Triton kernels; fall back to PyTorch ops. "
                              "Eliminates JIT compilation wait on first step.")
-    parser.add_argument("--deepspeed_config", type=str, default="./configs/ds_zero3.json")
     parser.add_argument("--no_gradient_checkpointing", action="store_true")
     
     # Logging
@@ -156,7 +156,6 @@ def main():
         num_gpus=world_size,
         bf16=args.bf16,
         torch_compile=not args.no_compile,
-        deepspeed_config=args.deepspeed_config,
         log_every_n_steps=args.log_every,
         save_every_n_tokens=args.save_every_tokens,
         wandb_project=args.wandb_project,
@@ -188,47 +187,15 @@ def main():
     logger.info("Building FORGE-3B model...")
     from model.forge_model import build_forge_3b
 
-    # Detect if ZeRO Stage 3 is enabled to use deepspeed.zero.Init() context manager (required for tied weights)
-    is_zero3 = False
-    ds_config = None
-    if args.deepspeed_config:
-        try:
-            with open(args.deepspeed_config) as f:
-                import json as _json
-                ds_config = _json.load(f)
-            if ds_config.get("zero_optimization", {}).get("stage", 0) == 3:
-                is_zero3 = True
-                # Patch gradient_accumulation_steps and micro_batch in ds_config if they are "auto"
-                if ds_config.get("gradient_accumulation_steps") == "auto":
-                    ds_config["gradient_accumulation_steps"] = train_config.gradient_accumulation_steps_phase2
-                if ds_config.get("train_micro_batch_size_per_gpu") == "auto":
-                    ds_config["train_micro_batch_size_per_gpu"] = train_config.micro_batch_size_per_gpu
-        except Exception as e:
-            logger.warning(f"Failed to check DeepSpeed config stage: {e}")
+    model = build_forge_3b(model_config)
+    model = model.to(device).to(torch.bfloat16 if args.bf16 else torch.float32)
 
-    if is_zero3 and ds_config is not None:
-        import deepspeed
-        logger.info("ZeRO-3 detected — wrapping model initialization in deepspeed.zero.Init()")
-        with deepspeed.zero.Init(config_dict_or_path=ds_config):
-            model = build_forge_3b(model_config)
-    else:
-        model = build_forge_3b(model_config)
-        model = model.to(device)
-
-    # Convert _parameters, _buffers, and _modules of all modules to AttrDict post-construction
-    # to support DeepSpeed setting dynamic attributes (e.g. _in_forward) on PyTorch 2.5+.
-    # This avoids setting class properties on nn.Module, which breaks torch.compile (Dynamo) tracing.
-    from training.gpu_optimizer import convert_to_attr_dict
-    convert_to_attr_dict(model)
-
-    n_params_total = sum(p.ds_numel if hasattr(p, "ds_numel") else p.numel() for p in model.parameters())
-    n_params_trainable = sum(p.ds_numel if hasattr(p, "ds_numel") else p.numel() for p in model.parameters() if p.requires_grad)
+    n_params_total = sum(p.numel() for p in model.parameters())
+    n_params_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     if is_main:
         logger.info(f"Model: {n_params_total / 1e9:.3f}B total params, "
                     f"{n_params_trainable / 1e9:.3f}B trainable")
-        # Quick sanity check against expected target
-        expected_min = 2.9e9
-        expected_max = 3.1e9
+        expected_min, expected_max = 2.9e9, 3.1e9
         if not (expected_min <= n_params_total <= expected_max):
             logger.warning(
                 f"⚠  Parameter count {n_params_total/1e9:.3f}B is outside the expected "
@@ -257,12 +224,7 @@ def main():
 
         if ckpt_model_path.exists():
             state_dict = torch.load(str(ckpt_model_path), map_location="cpu")
-            if is_zero3:
-                from deepspeed.zero import GatheredParameters
-                with GatheredParameters(list(model.parameters()), modifier_rank=0):
-                    missing, unexpected = model.load_state_dict(state_dict, strict=False)
-            else:
-                missing, unexpected = model.load_state_dict(state_dict, strict=False)
+            missing, unexpected = model.load_state_dict(state_dict, strict=False)
                 
             if missing:
                 logger.warning(f"Missing keys in checkpoint ({len(missing)}): {missing[:5]}...")

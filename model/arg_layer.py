@@ -140,15 +140,7 @@ class ARGLayer(nn.Module):
             torch.rand(self.d_inner) * (math.log(0.1) - math.log(0.001)) + math.log(0.001)
         )
         with torch.no_grad():
-            if hasattr(self.dt_proj.bias, "ds_id"):
-                import deepspeed
-                with deepspeed.zero.GatheredParameters(self.dt_proj.bias, modifier_rank=0):
-                    import torch.distributed as dist
-                    rank = dist.get_rank() if dist.is_initialized() else 0
-                    if rank == 0:
-                        self.dt_proj.bias.copy_(dt_bias + torch.log(-torch.expm1(-dt_bias)))
-            else:
-                self.dt_proj.bias.copy_(dt_bias + torch.log(-torch.expm1(-dt_bias)))
+            self.dt_proj.bias.copy_(dt_bias + torch.log(-torch.expm1(-dt_bias)))
         
         # nu initialized to log(1.0) = 0 → moderate decay
         nn.init.zeros_(self.nu)
@@ -158,17 +150,8 @@ class ARGLayer(nn.Module):
         
         # Conv1d — identity-like init
         nn.init.zeros_(self.conv1d.weight)
-        if hasattr(self.conv1d.weight, "ds_id"):
-            import deepspeed
-            with deepspeed.zero.GatheredParameters(self.conv1d.weight, modifier_rank=0):
-                import torch.distributed as dist
-                rank = dist.get_rank() if dist.is_initialized() else 0
-                if rank == 0:
-                    for i in range(self.d_inner):
-                        self.conv1d.weight.data[i, 0, -1] = 1.0
-        else:
-            for i in range(self.d_inner):
-                self.conv1d.weight.data[i, 0, -1] = 1.0
+        for i in range(self.d_inner):
+            self.conv1d.weight.data[i, 0, -1] = 1.0
     
     # ─────────────────────────────────────────────────────────────────────────
     # CPB: Initial State from Position
