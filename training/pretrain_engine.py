@@ -292,7 +292,7 @@ class PretrainEngine:
                         loss = outputs["loss"] / gradient_accumulation_steps
                     loss.backward()
 
-                step_loss += loss.item() * gradient_accumulation_steps
+                step_loss += loss.item()
                 aux = outputs.get("aux_loss")
                 if aux is not None:
                     step_aux += float(aux.detach()) / gradient_accumulation_steps
