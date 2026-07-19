@@ -80,7 +80,8 @@ class PretrainEngine:
         self._start_time = time.time()
 
         # Budget tracking (USD)
-        self._hourly_cost = 63.17   # 16× H100 SXM community cloud
+        # Fix: Dynamic hourly cost based on RunPod Community Cloud 1x H100 SXM rate ($3.29/hr)
+        self._hourly_cost = 3.29 * world_size
         self._budget = 450.0
 
         from training.gpu_optimizer import GPUMemoryMonitor, ThroughputMeter
