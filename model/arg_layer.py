@@ -180,6 +180,7 @@ class ARGLayer(nn.Module):
     # RECURRENT BRANCH
     # ─────────────────────────────────────────────────────────────────────────
     
+    @torch._dynamo.disable
     def recurrent_branch(
         self,
         x: torch.Tensor,         # (B, T, d_model)
@@ -246,6 +247,7 @@ class ARGLayer(nn.Module):
     # LOCAL ATTENTION BRANCH
     # ─────────────────────────────────────────────────────────────────────────
     
+    @torch._dynamo.disable
     def local_attention_branch(
         self,
         x: torch.Tensor,   # (B, T, d_model)
