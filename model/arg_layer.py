@@ -64,6 +64,7 @@ class ARGLayer(nn.Module):
         use_flash_attention: bool = True,
         rope_base: float = 500_000.0,
         layer_idx: int = 0,
+        max_seq_len: int = 4096,
     ):
         super().__init__()
         self.d_model = d_model

@@ -109,6 +109,7 @@ class ForgeBlock(nn.Module):
                 use_flash_attention=use_flash_attention,
                 rope_base=rope_base,
                 layer_idx=layer_idx,
+                max_seq_len=max_seq_len,
             )
         
         # ── FFN ───────────────────────────────────────────────────────────────
