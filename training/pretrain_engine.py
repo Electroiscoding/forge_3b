@@ -256,7 +256,7 @@ class PretrainEngine:
             step_aux = 0.0
             self.throughput_meter.start_step()
             _micro_step_start = time.perf_counter()
-            _tokens_per_micro = self.config.micro_batch_per_gpu * context_length * self.world_size
+            _tokens_per_micro = self.config.micro_batch_size_per_gpu * context_length * self.world_size
 
             for accum_step in range(gradient_accumulation_steps):
                 if self.is_main and (
