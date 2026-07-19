@@ -119,7 +119,7 @@ class ForgeModelConfig:
     use_flash_attention: bool = True
     use_triton_kernels: bool = True    # Triton fused ops
     use_torch_compile: bool = True
-    compile_mode: str = "reduce-overhead" # "default"|"reduce-overhead"|"max-autotune"
+    compile_mode: str = "default" # "default"|"reduce-overhead"|"max-autotune"
     use_gradient_checkpointing: bool = True
     gradient_checkpointing_ratio: float = 0.5  # checkpoint every 2nd layer
     
@@ -236,7 +236,7 @@ class PretrainConfig:
     fp8: bool = False                          # H100 FP8 (experimental)
     deepspeed_config: str = "./configs/ds_zero3.json"
     torch_compile: bool = True
-    compile_mode: str = "reduce-overhead"
+    compile_mode: str = "default"
     
     # ── Data ──────────────────────────────────────────────────────────────────
     num_dataloader_workers: int = 4
@@ -284,7 +284,7 @@ class SFTConfig:
     num_gpus: int = 16
     bf16: bool = True
     torch_compile: bool = True
-    compile_mode: str = "reduce-overhead"
+    compile_mode: str = "default"
 
 
 @dataclass  
@@ -321,7 +321,7 @@ class DPOConfig:
     num_gpus: int = 16
     bf16: bool = True
     torch_compile: bool = True
-    compile_mode: str = "reduce-overhead"
+    compile_mode: str = "default"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

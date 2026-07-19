@@ -110,7 +110,7 @@ def setup_distributed(
 
 def compile_model(
     model: nn.Module,
-    mode: str = "reduce-overhead",
+    mode: str = "default",
     fullgraph: bool = False,
     dynamic: bool = True,
 ) -> nn.Module:
@@ -175,7 +175,7 @@ def compile_model(
 
 def compile_forge_layers(
     model: nn.Module,
-    mode: str = "reduce-overhead",
+    mode: str = "default",
     dynamic: bool = True,
 ) -> nn.Module:
     """
