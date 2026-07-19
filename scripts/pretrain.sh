@@ -91,7 +91,6 @@ ${LAUNCHER} run_pretrain.py \
     --micro_batch_per_gpu "$MICRO_BATCH"       \
     --save_every_tokens   "$SAVE_EVERY"        \
     --log_every           "$LOG_EVERY"         \
-    --deepspeed_config    "$DS_CONFIG"         \
     --wandb_project       "$WANDB_PROJECT"     \
     ${WANDB_ENTITY:+--wandb_entity "$WANDB_ENTITY"} \
     --seed                "$SEED"              \
