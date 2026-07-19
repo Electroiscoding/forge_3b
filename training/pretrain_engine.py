@@ -255,15 +255,27 @@ class PretrainEngine:
             step_loss = 0.0
             step_aux = 0.0
             self.throughput_meter.start_step()
+            _micro_step_start = time.perf_counter()
+            _tokens_per_micro = self.config.micro_batch_per_gpu * context_length * self.world_size
 
             for accum_step in range(gradient_accumulation_steps):
                 if self.is_main and (
                     accum_step % 100 == 0 or accum_step == gradient_accumulation_steps - 1
                 ):
-                    logger.info(
-                        f"  [Micro-step {accum_step}/{gradient_accumulation_steps}] "
-                        f"Forward/backward pass..."
-                    )
+                    elapsed = time.perf_counter() - _micro_step_start
+                    if accum_step > 0 and elapsed > 0:
+                        live_tok_sec = (accum_step * _tokens_per_micro) / elapsed
+                        live_tflops = self.throughput_meter.model_flops_per_token * live_tok_sec / 1e12
+                        live_mfu = live_tflops / (self.throughput_meter.peak_tflops * self.world_size)
+                        logger.info(
+                            f"  [Micro-step {accum_step}/{gradient_accumulation_steps}] "
+                            f"Forward/backward... | Live Tok/s: {live_tok_sec:,.0f} | MFU: {live_mfu*100:.1f}%"
+                        )
+                    else:
+                        logger.info(
+                            f"  [Micro-step {accum_step}/{gradient_accumulation_steps}] "
+                            f"Forward/backward pass..."
+                        )
 
                 try:
                     batch = next(data_iter)
