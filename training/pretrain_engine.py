@@ -80,14 +80,16 @@ class PretrainEngine:
         self._start_time = time.time()
 
         # Budget tracking (USD)
-        # Fix: Dynamic hourly cost based on RunPod Community Cloud 1x H100 SXM rate ($3.29/hr)
+        # Dynamic hourly cost based on RunPod Community Cloud 1x H100 SXM rate ($3.29/hr)
         self._hourly_cost = 3.29 * world_size
-        self._budget = 450.0
+        self._budget = 400.0  # $400 hard cap for FORGE-1B full pipeline
 
         from training.gpu_optimizer import GPUMemoryMonitor, ThroughputMeter
         self.memory_monitor = GPUMemoryMonitor(self.device, oom_threshold_gb=8.0)
+        # FORGE-1B: 6 × ~850M active params (after MoE sparsity) = 5.1B FLOPs/token
+        # Full param count ≈ 1.06B, active per step ≈ 850M (2/32 experts active)
         self.throughput_meter = ThroughputMeter(
-            model_flops_per_token=6 * 1_174_000_000,  # 6 × 1.174B active params
+            model_flops_per_token=6 * 850_000_000,  # 6 × 850M active params
             device=self.device,
             world_size=world_size,
         )
@@ -174,34 +176,51 @@ class PretrainEngine:
         lr: float,
         tokens: int,
         phase: int,
+        seq_len: int,
+        grad_norm: float = 0.0,
         extra: Optional[Dict] = None,
     ):
-        """Log training metrics to terminal and wandb."""
+        """Log every training metric: loss, perplexity, Tok/s, MFU, grad_norm, cost."""
+        import math
         elapsed_h = (time.time() - self._start_time) / 3600
         cost_usd = elapsed_h * self._hourly_cost
 
         stats = self.throughput_meter.get_stats()
         tok_per_sec = stats.get("tokens_per_sec", 0)
         mfu = stats.get("mfu", 0)
+        step_ms = stats.get("step_time_ms", 0)
 
-        if self.is_main and step % self.config.log_every_n_steps == 0:
+        # Perplexity: exp(loss). Clamp to avoid overflow.
+        perplexity = math.exp(min(loss, 20.0))
+        
+        mem = self.memory_monitor.snapshot()
+
+        if self.is_main:
             logger.info(
-                f"Phase{phase} | Step {step:,} | Tokens {tokens/1e9:.2f}B | "
-                f"Loss {loss:.4f} | AuxLoss {aux_loss:.5f} | LR {lr:.2e} | "
-                f"Tok/s {tok_per_sec:,.0f} | MFU {mfu*100:.1f}% | "
-                f"Cost ${cost_usd:.2f}/${self._budget:.0f}"
+                f"[Ph{phase}|Step {step:,}] "
+                f"loss={loss:.4f} | ppl={perplexity:.2f} | aux={aux_loss:.5f} | "
+                f"lr={lr:.2e} | gnorm={grad_norm:.3f} | "
+                f"tok/s={tok_per_sec:,.0f} | MFU={mfu*100:.1f}% | "
+                f"step={step_ms:.0f}ms | "
+                f"tokens={tokens/1e9:.3f}B | "
+                f"mem={mem['allocated_gb']:.1f}/{mem['total_gb']:.1f}GB | "
+                f"cost=${cost_usd:.2f}/${self._budget:.0f}"
             )
             if self.wandb_run is not None:
                 metrics = {
                     f"phase{phase}/loss": loss,
+                    f"phase{phase}/perplexity": perplexity,
                     f"phase{phase}/aux_loss": aux_loss,
                     f"phase{phase}/lr": lr,
+                    f"phase{phase}/grad_norm": grad_norm,
                     f"phase{phase}/tokens_b": tokens / 1e9,
                     "train/tokens_per_sec": tok_per_sec,
-                    "train/mfu": mfu,
+                    "train/mfu_pct": mfu * 100,
+                    "train/step_ms": step_ms,
                     "train/cost_usd": cost_usd,
                     "train/budget_remaining": self._budget - cost_usd,
-                    "hardware/gpu_mem_gb": self.memory_monitor.snapshot()["allocated_gb"],
+                    "hardware/gpu_mem_allocated_gb": mem["allocated_gb"],
+                    "hardware/gpu_mem_reserved_gb": mem.get("reserved_gb", 0),
                 }
                 if extra:
                     metrics.update(extra)
@@ -243,6 +262,7 @@ class PretrainEngine:
         self.model.train()
         tokens_this_phase = 0
         data_iter = iter(dataloader)
+        context_length = seq_len  # alias: the sequence length for this phase
 
         while tokens_this_phase < target_tokens:
             if self.is_main:
@@ -335,7 +355,8 @@ class PretrainEngine:
             self._log_step(
                 self._global_step, step_loss, step_aux,
                 scheduler.get_lr(), self._tokens_processed, phase,
-                extra={"train/grad_norm": grad_norm},
+                seq_len=seq_len,
+                grad_norm=grad_norm,
             )
 
             # Periodic checkpointing
@@ -380,16 +401,16 @@ class PretrainEngine:
         self._wrap_ddp()
 
         logger.info("=" * 70)
-        logger.info("FORGE-3B PRETRAINING STARTED (plain PyTorch DDP, no DeepSpeed)")
-        logger.info(f"  Target: {self.config.total_tokens/1e9:.0f}B tokens")
+        logger.info("FORGE-1B PRETRAINING STARTED (plain PyTorch DDP, no DeepSpeed)")
+        logger.info(f"  Target: {self.config.total_tokens/1e9:.0f}B tokens (Chinchilla-optimal for 1B)")
         logger.info(f"  Budget: ${self._budget:.0f}  |  Cost rate: ${self._hourly_cost:.2f}/hr")
         logger.info(f"  Max training hours: {self._budget/self._hourly_cost:.1f}h")
         logger.info(f"  World size: {self.world_size}")
         logger.info("=" * 70)
 
-        # ── Phase 1: Vocabulary Warmup ────────────────────────────────────────
+        # ── Phase 1: Vocabulary Warmup ─────────────────────────────────────────
         logger.info(f"\n{'='*50}")
-        logger.info("PHASE 1: Vocabulary Warmup (5B tokens, seq=512)")
+        logger.info("PHASE 1: Vocabulary Warmup (2B tokens, seq=512)")
         self._set_local_window(64)
         ga_steps_p1 = max(1, self.config.phase1_global_batch_tokens // (
             self.config.micro_batch_size_per_gpu * 512 * self.world_size
@@ -401,9 +422,9 @@ class PretrainEngine:
         )
         self._save_checkpoint(1, self._global_step, self._tokens_processed)
 
-        # ── Phase 2: Core Pre-Training ────────────────────────────────────────
+        # ── Phase 2: Core Pre-Training ─────────────────────────────────────────
         logger.info(f"\n{'='*50}")
-        logger.info("PHASE 2: Core Pre-Training (43B tokens, seq=2048)")
+        logger.info("PHASE 2: Core Pre-Training (16B tokens, seq=2048)")
         ga_steps_p2 = self.config.gradient_accumulation_steps_phase2
         self.run_phase(
             phase=2, dataloader=phase2_dataloader, optimizer=optimizer,
@@ -412,7 +433,7 @@ class PretrainEngine:
         )
         self._save_checkpoint(2, self._global_step, self._tokens_processed)
 
-        # ── Phase 3: Context Extension ────────────────────────────────────────
+        # ── Phase 3: Context Extension ─────────────────────────────────────────
         logger.info(f"\n{'='*50}")
         logger.info("PHASE 3: Context Extension (2B tokens, seq=4096)")
         self._enable_yarn_scaling(factor=2.0)

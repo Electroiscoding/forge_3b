@@ -49,54 +49,54 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 @dataclass
 class ForgeModelConfig:
-    """Complete FORGE-3B architecture configuration."""
+    """Complete FORGE-1B architecture configuration. ~1.06B active params per token."""
     
     # ── Core Dimensions ──────────────────────────────────────────────────────
     vocab_size: int = 206_464          # CRAYON standard profile (206,373) padded to ×128
-    d_model: int = 2048
-    n_layers: int = 36
+    d_model: int = 1536               # 1B: 1536 (was 2048 for 3B)
+    n_layers: int = 24                # 1B: 24   (was 36 for 3B)
     max_seq_len: int = 4096
     
     # ── Layer Distribution ────────────────────────────────────────────────────
-    # Layer 0,1,2 = ARG; Layer 3 = MHA; repeat ×9
-    mha_layer_indices: List[int] = field(default_factory=lambda: [3,7,11,15,19,23,27,31,35])
+    # Layer 0,1,2 = ARG; Layer 3 = MHA; repeat ×6
+    mha_layer_indices: List[int] = field(default_factory=lambda: [3,7,11,15,19,23])
     # Dense FFN on odd layers, HSE on even layers
-    dense_ffn_layer_indices: List[int] = field(default_factory=lambda: list(range(1,36,2)))
-    hse_ffn_layer_indices: List[int] = field(default_factory=lambda: list(range(0,36,2)))
+    dense_ffn_layer_indices: List[int] = field(default_factory=lambda: list(range(1,24,2)))
+    hse_ffn_layer_indices: List[int] = field(default_factory=lambda: list(range(0,24,2)))
     
     # ── ARG (Adaptive Recurrent Gating) ──────────────────────────────────────
-    arg_d_inner: int = 2048
-    arg_d_state: int = 64
-    arg_d_rank: int = 64               # dt projection rank
+    arg_d_inner: int = 1536           # matches d_model for 1B
+    arg_d_state: int = 48
+    arg_d_rank: int = 48               # dt projection rank
     arg_conv_kernel: int = 4
     arg_local_window: int = 64         # local attention window (phase 1+2)
     arg_local_n_heads: int = 8
     arg_local_n_kv_heads: int = 2
-    arg_head_dim: int = 128
+    arg_head_dim: int = 96            # 1536/16 heads
     arg_scalar_gate: bool = True       # scalar gate per token (vs d_model-dim)
     
     # ── MHA (Multi-Head Attention) ────────────────────────────────────────────
     mha_n_heads: int = 16
     mha_n_kv_heads: int = 4            # GQA: 4:1 ratio
-    mha_head_dim: int = 128
+    mha_head_dim: int = 96            # 1536/16 heads
     rope_theta: float = 500_000.0      # long-context RoPE base
     rope_scaling_type: Optional[str] = None  # None | "yarn"
     rope_scaling_factor: float = 1.0
     
     # ── Dense FFN (SwiGLU) ────────────────────────────────────────────────────
-    dense_d_ff: int = 5504             # ≈ 2.69 × d_model, multiple of 128
+    dense_d_ff: int = 4096             # ≈ 2.67 × d_model, multiple of 128
     
     # ── HSE FFN (Hierarchical Sparse Expert) ──────────────────────────────────
     hse_n_domains: int = 4
     hse_n_experts_per_domain: int = 8  # total 32 experts
     hse_top_k: int = 2                 # active per token
-    hse_d_ff_expert: int = 512
+    hse_d_ff_expert: int = 384        # scaled for 1B
     hse_capacity_factor: float = 1.25
     hse_expert_dropout: float = 0.1
     hse_aux_loss_alpha: float = 0.01
     hse_gumbel_tau_init: float = 1.0
     hse_gumbel_tau_final: float = 0.1
-    hse_gumbel_tau_warmup_tokens: int = 20_000_000_000  # anneal over 20B tokens
+    hse_gumbel_tau_warmup_tokens: int = 10_000_000_000  # anneal over 10B tokens
     
     # ── Normalization ─────────────────────────────────────────────────────────
     norm_type: str = "dgn"             # "dgn" or "rmsnorm"
@@ -119,9 +119,9 @@ class ForgeModelConfig:
     use_flash_attention: bool = True
     use_triton_kernels: bool = True    # Triton fused ops
     use_torch_compile: bool = True
-    compile_mode: str = "default" # "default"|"reduce-overhead"|"max-autotune"
-    use_gradient_checkpointing: bool = True
-    gradient_checkpointing_ratio: float = 0.5  # checkpoint every 2nd layer
+    compile_mode: str = "max-autotune"  # max throughput on H100
+    use_gradient_checkpointing: bool = False  # 1B fits in 80GB without checkpointing → faster
+    gradient_checkpointing_ratio: float = 0.0
     
     def n_params_total(self) -> int:
         """Approximate total parameter count."""
@@ -179,23 +179,35 @@ class ForgeModelConfig:
 
 @dataclass
 class PretrainConfig:
-    """Phase-aware pretraining configuration."""
+    """Phase-aware pretraining configuration for FORGE-1B.
     
-    output_dir: str = "./checkpoints/forge_3b_pretrain"
-    data_dir: str = "Phase-Technologies/forge-3b-pretrain-data"
+    Budget math (1x H100 SXM @ $3.29/hr):
+      - Phase 1 (vocab warmup):  2B tokens @ 80k tok/s  →  ~7h  → $23
+      - Phase 2 (core pretrain): 16B tokens @ 80k tok/s → ~56h  → $184
+      - Phase 3 (ctx extension):  2B tokens @ 60k tok/s →  ~9h  → $30
+      PRETRAIN TOTAL: ~72h → ~$237
+      SFT:  1.4B tokens → ~5h → $16
+      DPO:  0.8B tokens → ~3h → $10
+      GRAND TOTAL: ~$263 of $400 budget. $137 buffer.
+    """
+    
+    output_dir: str = "./checkpoints/forge_1b_pretrain"
+    data_dir: str = "Phase-Technologies/forge-3b-pretrain-data"  # same tokenized data
     resume_from_checkpoint: Optional[str] = None
     
-    # ── Token Budget ──────────────────────────────────────────────────────────
-    phase1_tokens: int = 5_000_000_000       # 5B
-    phase2_tokens: int = 43_000_000_000      # 43B
-    phase3_tokens: int = 2_000_000_000       # 2B
-    total_tokens: int = 50_000_000_000       # 50B
+    # ── Token Budget (Chinchilla-optimal for 1B: 20× params = 20B tokens) ────
+    phase1_tokens: int = 2_000_000_000       # 2B  vocab warmup (seq=512)
+    phase2_tokens: int = 16_000_000_000      # 16B core pretrain (seq=2048)
+    phase3_tokens: int = 2_000_000_000       # 2B  context extension (seq=4096)
+    total_tokens: int = 20_000_000_000       # 20B total
     
     # ── Batch Config ──────────────────────────────────────────────────────────
-    phase1_global_batch_tokens: int = 1_000_000
-    phase2_global_batch_tokens: int = 2_000_000
-    phase3_global_batch_tokens: int = 1_000_000
-    micro_batch_size_per_gpu: int = 2        # sequences per GPU per step
+    # micro_batch=8 fills H100 VRAM with 1B model (no grad checkpointing needed)
+    # phase2 global batch = 1M tokens → 256K accumulation steps → stable training
+    phase1_global_batch_tokens: int = 524_288     # 512K tokens/step (phase 1)
+    phase2_global_batch_tokens: int = 1_048_576   # 1M tokens/step  (phase 2)
+    phase3_global_batch_tokens: int = 524_288     # 512K tokens/step (phase 3)
+    micro_batch_size_per_gpu: int = 8        # sequences per GPU per step
     
     # ── Context Lengths ───────────────────────────────────────────────────────
     phase1_seq_len: int = 512
@@ -205,7 +217,7 @@ class PretrainConfig:
     # ── Learning Rate ─────────────────────────────────────────────────────────
     lr_max: float = 3e-4
     lr_min: float = 3e-5
-    lr_warmup_tokens: int = 5_000_000_000    # warm up over phase1
+    lr_warmup_tokens: int = 2_000_000_000    # warm up over phase1
     lr_schedule: str = "cosine"
     
     # ── AdamW ─────────────────────────────────────────────────────────────────
@@ -221,22 +233,22 @@ class PretrainConfig:
     router_lr_mult: float = 0.5
     
     # ── Checkpointing ─────────────────────────────────────────────────────────
-    save_every_n_tokens: int = 2_000_000_000  # every 2B tokens
+    save_every_n_tokens: int = 1_000_000_000  # checkpoint every 1B tokens
     keep_last_n_checkpoints: int = 5
     
     # ── Logging ───────────────────────────────────────────────────────────────
-    log_every_n_steps: int = 10
-    eval_every_n_steps: int = 500
-    wandb_project: str = "forge_3b_pretrain"
+    log_every_n_steps: int = 1           # log every step for full metrics visibility
+    eval_every_n_steps: int = 200        # eval perplexity every 200 steps
+    wandb_project: str = "forge_1b_pretrain"
     wandb_entity: Optional[str] = None
     
     # ── GPU/Distributed ───────────────────────────────────────────────────────
-    num_gpus: int = 16
+    num_gpus: int = 1                          # default 1x H100; set to 16 for 16x
     bf16: bool = True
     fp8: bool = False                          # H100 FP8 (experimental)
     deepspeed_config: str = "./configs/ds_zero3.json"
     torch_compile: bool = True
-    compile_mode: str = "default"
+    compile_mode: str = "max-autotune"         # peak throughput
     
     # ── Data ──────────────────────────────────────────────────────────────────
     num_dataloader_workers: int = 4
@@ -253,16 +265,16 @@ class PretrainConfig:
 
 @dataclass
 class SFTConfig:
-    """Supervised Fine-Tuning configuration."""
+    """Supervised Fine-Tuning configuration for FORGE-1B."""
     
-    base_model_path: str = "./checkpoints/forge_3b_pretrain/final"
-    output_dir: str = "./checkpoints/forge_3b_sft"
+    base_model_path: str = "./checkpoints/forge_1b_pretrain/final"
+    output_dir: str = "./checkpoints/forge_1b_sft"
     data_dir: str = "Phase-Technologies/forge-3b-sft-data"
     
     # ── Training ──────────────────────────────────────────────────────────────
     total_tokens: int = 1_400_000_000
-    global_batch_tokens: int = 256_000
-    micro_batch_size_per_gpu: int = 1
+    global_batch_tokens: int = 524_288  # 512K per step
+    micro_batch_size_per_gpu: int = 4
     seq_len: int = 4096
     
     # ── Optimizer ─────────────────────────────────────────────────────────────
@@ -278,21 +290,21 @@ class SFTConfig:
     epochs: int = 1
     loss_on_prompt: bool = False       # only compute loss on assistant turns
     
-    save_every_n_steps: int = 200
-    wandb_project: str = "forge_3b_sft"
+    save_every_n_steps: int = 100
+    wandb_project: str = "forge_1b_sft"
     deepspeed_config: str = "./configs/ds_zero3_sft.json"
-    num_gpus: int = 16
+    num_gpus: int = 1
     bf16: bool = True
     torch_compile: bool = True
-    compile_mode: str = "default"
+    compile_mode: str = "max-autotune"
 
 
 @dataclass  
 class DPOConfig:
-    """Direct Preference Optimization configuration."""
+    """Direct Preference Optimization configuration for FORGE-1B."""
     
-    base_model_path: str = "./checkpoints/forge_3b_sft/final"
-    output_dir: str = "./checkpoints/forge_3b_dpo"
+    base_model_path: str = "./checkpoints/forge_1b_sft/final"
+    output_dir: str = "./checkpoints/forge_1b_dpo"
     data_dir: str = "Phase-Technologies/forge-3b-dpo-data"
     
     # ── DPO ───────────────────────────────────────────────────────────────────
@@ -302,7 +314,7 @@ class DPOConfig:
     
     # ── Training ──────────────────────────────────────────────────────────────
     n_preference_pairs: int = 200_000
-    batch_size_pairs: int = 16         # preference pairs per GPU step
+    batch_size_pairs: int = 8          # preference pairs per GPU step
     gradient_accumulation_steps: int = 4
     seq_len: int = 4096
     
@@ -316,12 +328,12 @@ class DPOConfig:
     n_epochs: int = 1
     
     save_every_n_steps: int = 100
-    wandb_project: str = "forge_3b_dpo"
+    wandb_project: str = "forge_1b_dpo"
     deepspeed_config: str = "./configs/ds_zero3_sft.json"
-    num_gpus: int = 16
+    num_gpus: int = 1
     bf16: bool = True
     torch_compile: bool = True
-    compile_mode: str = "default"
+    compile_mode: str = "max-autotune"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
