@@ -37,7 +37,7 @@ os.environ.setdefault("NCCL_P2P_DISABLE", "0")
 
 # CUDA memory allocator — reduce fragmentation for large model + optimizer states
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF",
-    "max_split_size_mb:128,expandable_segments:True,garbage_collection_threshold:0.8")
+    "max_split_size_mb:128,garbage_collection_threshold:0.8")
 
 # Tokenizer parallelism — disable HF tokenizer parallelism (we use CRAYON)
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
