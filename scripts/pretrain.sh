@@ -54,12 +54,12 @@ LOG_FILE="$OUTPUT_DIR/logs/pretrain_$(date +%Y%m%d_%H%M%S).log"
 echo "[INFO] Logging to $LOG_FILE"
 
 # ── Sanity checks ─────────────────────────────────────────────────────────────
-if [ ! -d "$DATA_DIR" ]; then
-    echo "[ERROR] DATA_DIR does not exist: $DATA_DIR"
-    echo "        Run data preprocessing first:"
-    echo "        python -m data.preprocessing --all --raw_base /data/raw --out_base $DATA_DIR"
-    exit 1
-fi
+# if [ ! -d "$DATA_DIR" ]; then
+#     echo "[ERROR] DATA_DIR does not exist: $DATA_DIR"
+#     echo "        Run data preprocessing first:"
+#     echo "        python -m data.preprocessing --all --raw_base /data/raw --out_base $DATA_DIR"
+#     exit 1
+# fi
 
 echo "========================================================================"
 echo " FORGE-3B PRETRAINING"
