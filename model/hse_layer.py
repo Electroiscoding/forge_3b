@@ -204,7 +204,7 @@ class HSELayer(nn.Module):
         return_aux_loss: bool = True,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
-        Forward pass with hierarchical routing.
+        Forward pass with hierarchical routing (vectorized for maximum GPU throughput).
         Returns (output, aux_loss) where aux_loss is for load balancing.
         """
         B, T, D = x.shape
@@ -216,10 +216,9 @@ class HSELayer(nn.Module):
         
         # ── Tier-1 Routing ────────────────────────────────────────────────────
         tier1_logits = self.tier1_router(x_flat)              # (N, n_domains)
-        tier1_probs = F.softmax(tier1_logits / self.gumbel_tau, dim=-1)
+        tier1_probs = F.softmax(tier1_logits / float(self.gumbel_tau), dim=-1)
         
         if self.training:
-            # Gumbel-softmax for differentiable discrete routing
             domain_idx = F.gumbel_softmax(
                 tier1_logits, 
                 tau=float(self.gumbel_tau), 
@@ -228,69 +227,50 @@ class HSELayer(nn.Module):
         else:
             domain_idx = tier1_probs.argmax(dim=-1)            # (N,)
         
-        # ── Tier-2 Routing and Expert Computation ────────────────────────────
-        output = torch.zeros(N, D, device=x.device, dtype=x.dtype)
+        # ── Tier-2 Routing (Vectorized across domains) ────────────────────────
+        all_t2_indices = torch.empty(N, self.top_k, dtype=torch.long, device=x.device)
+        all_t2_weights = torch.empty(N, self.top_k, dtype=x.dtype, device=x.device)
         
         for d in range(self.n_domains):
-            # Tokens assigned to domain d
             d_mask = (domain_idx == d)
-            n_d = d_mask.sum()
+            n_d = d_mask.sum().item()
             if n_d == 0:
                 continue
+            x_d = x_flat[d_mask]
+            t2_logits = self.tier2_routers[d](x_d)
+            probs = F.softmax(t2_logits, dim=-1)
+            w, topk_idx = probs.topk(self.top_k, dim=-1)
+            w = w / (w.sum(-1, keepdim=True) + 1e-9)
+            all_t2_indices[d_mask] = topk_idx + (d * self.n_experts_per_domain)
+            all_t2_weights[d_mask] = w
             
-            x_d = x_flat[d_mask]                               # (n_d, D)
-            
-            # Tier-2 routing within domain d
-            t2_logits = self.tier2_routers[d](x_d)             # (n_d, n_exp)
-            t2_probs = F.softmax(t2_logits, dim=-1)
-            
-            # Capacity enforcement: each expert handles at most cap tokens
-            cap = max(1, int(self.capacity_factor * n_d / self.n_experts_per_domain))
-            
-            # Top-k expert selection
-            topk_weights, topk_indices = t2_probs.topk(self.top_k, dim=-1)  # (n_d, k)
-            topk_weights = topk_weights / (topk_weights.sum(-1, keepdim=True) + 1e-9)
-            
-            expert_out = torch.zeros_like(x_d)  # (n_d, D)
-            
-            for k in range(self.top_k):
-                expert_ids = topk_indices[:, k]  # (n_d,)
-                weights = topk_weights[:, k:k+1] # (n_d, 1)
-                
-                # Route to each expert in this domain
-                for e in range(self.n_experts_per_domain):
-                    global_eid = d * self.n_experts_per_domain + e
-                    e_mask = (expert_ids == e)
-                    n_e = e_mask.sum()
-                    
-                    if n_e == 0:
-                        continue
-                    
-                    # Capacity check
-                    if n_e > cap:
-                        # Drop overflow tokens (set their contribution to 0)
-                        # In practice use a priority score; here use first-come
-                        e_mask_indices = e_mask.nonzero(as_tuple=True)[0][:cap]
-                        e_mask_cap = torch.zeros_like(e_mask)
-                        e_mask_cap[e_mask_indices] = True
-                        e_mask = e_mask_cap
-                        n_e = cap
-                    
-                    x_e = x_d[e_mask]                           # (n_e, D)
-                    
-                    # Apply expert dropout during training
-                    if self.training and self.expert_dropout > 0:
-                        x_e = self.expert_dropout_layer(x_e)
-                    
-                    # Expert forward pass
-                    y_e = self.experts[global_eid](x_e)         # (n_e, D)
-                    
-                    # Weight and accumulate
-                    expert_out[e_mask] += weights[e_mask] * y_e
-            
-            output[d_mask] = expert_out
+        # ── Vectorized Token-Expert Dispatch ──────────────────────────────────
+        flat_exp_ids = all_t2_indices.reshape(-1)
+        flat_tokens = torch.arange(N, device=x.device).unsqueeze(1).expand(-1, self.top_k).reshape(-1)
+        flat_weights = all_t2_weights.reshape(-1, 1)
         
-        output = output.reshape(B, T, D)
+        sort_perm = torch.argsort(flat_exp_ids)
+        sorted_exp = flat_exp_ids[sort_perm]
+        sorted_tokens = flat_tokens[sort_perm]
+        sorted_weights = flat_weights[sort_perm]
+        
+        counts = torch.bincount(sorted_exp, minlength=self.n_experts_total).tolist()
+        out_flat = torch.zeros(N, D, device=x.device, dtype=x.dtype)
+        offset = 0
+        
+        for e in range(self.n_experts_total):
+            cnt = counts[e]
+            if cnt > 0:
+                t_idx = sorted_tokens[offset : offset + cnt]
+                w_e = sorted_weights[offset : offset + cnt]
+                x_e = x_flat[t_idx]
+                if self.training and self.expert_dropout > 0:
+                    x_e = self.expert_dropout_layer(x_e)
+                y_e = self.experts[e](x_e)
+                out_flat.index_add_(0, t_idx, w_e * y_e)
+                offset += cnt
+                
+        output = out_flat.reshape(B, T, D)
         
         # ── Auxiliary loss ────────────────────────────────────────────────────
         aux_loss = None

@@ -95,6 +95,13 @@ def setup_distributed(
     )
     
     torch.cuda.set_device(local_rank)
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cudnn.benchmark = True
+    if hasattr(torch.backends.cuda, "enable_flash_sdp"):
+        torch.backends.cuda.enable_flash_sdp(True)
+    if hasattr(torch.backends.cuda, "enable_mem_efficient_sdp"):
+        torch.backends.cuda.enable_mem_efficient_sdp(True)
     
     # NCCL environment tuning for NVLink
     os.environ["NCCL_MIN_NCHANNELS"] = str(min(world_size * 2, 8))
@@ -507,11 +514,11 @@ class ThroughputMeter:
         props = torch.cuda.get_device_properties(self.device)
         name = props.name.lower()
         
-        # Known peak BF16 TFLOPS values
+        # Standard Dense BF16 Tensor Core peak TFLOPS (industry standard for MFU)
         gpu_tflops = {
-            "h100": 1979.0,
-            "h200": 1979.0,
-            "b200": 4500.0,
+            "h100": 989.0,
+            "h200": 989.0,
+            "b200": 2250.0,
             "mi300": 653.7,
             "a100": 312.0,
             "a40": 37.4,

@@ -276,7 +276,8 @@ class PretrainEngine:
             step_aux = 0.0
             self.throughput_meter.start_step()
             _micro_step_start = time.perf_counter()
-            _tokens_per_micro = self.config.micro_batch_size_per_gpu * context_length * self.world_size
+            mb_this_phase = getattr(self.config, f"phase{phase}_micro_batch_per_gpu", self.config.micro_batch_size_per_gpu)
+            _tokens_per_micro = mb_this_phase * context_length * self.world_size
 
             for accum_step in range(gradient_accumulation_steps):
                 if self.is_main and (
@@ -284,7 +285,7 @@ class PretrainEngine:
                 ):
                     elapsed = time.perf_counter() - _micro_step_start
                     if accum_step > 0 and elapsed > 0:
-                        live_tok_sec = (accum_step * _tokens_per_micro) / elapsed
+                        live_tok_sec = ((accum_step + 1) * _tokens_per_micro) / elapsed
                         live_tflops = self.throughput_meter.model_flops_per_token * live_tok_sec / 1e12
                         live_mfu = live_tflops / (self.throughput_meter.peak_tflops * self.world_size)
                         logger.info(
@@ -335,12 +336,7 @@ class PretrainEngine:
             optimizer.step()
 
             # Token accounting
-            batch_tokens = (
-                self.config.micro_batch_size_per_gpu
-                * seq_len
-                * self.world_size
-                * gradient_accumulation_steps
-            )
+            batch_tokens = _tokens_per_micro * gradient_accumulation_steps
             scheduler.step(batch_tokens)
             self.throughput_meter.end_step(batch_tokens)
 

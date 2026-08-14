@@ -297,7 +297,7 @@ class ARGLayer(nn.Module):
             K = K.repeat_interleave(n_rep, dim=1)  # (B, H, T, D)
             V = V.repeat_interleave(n_rep, dim=1)
         
-        if self.use_flash_attention:
+        if self.use_flash_attention and FLASH_ATTN_AVAILABLE:
             # FlashAttention with sliding window — O(T*W) compute
             # Rearrange to (B, T, H, D) for flash_attn
             Q_fa = rearrange(Q, 'b h t d -> b t h d').contiguous()
@@ -312,19 +312,13 @@ class ARGLayer(nn.Module):
             )  # (B, T, H, D)
             out = rearrange(out, 'b t h d -> b t (h d)')
         else:
-            # PyTorch fallback with manual windowed mask
-            scale = self.head_dim ** -0.5
-            scores = torch.einsum('bhid,bhjd->bhij', Q, K) * scale  # (B, H, T, T)
-            
-            # Causal window mask
+            # Fast PyTorch SDPA with sliding window mask
             indices = torch.arange(T, device=x.device)
             mask_2d = (indices.unsqueeze(0) <= indices.unsqueeze(1)) & \
                       (indices.unsqueeze(0) >= (indices.unsqueeze(1) - W))
-            scores = scores.masked_fill(~mask_2d.unsqueeze(0).unsqueeze(0), float('-inf'))
-            
-            attn = F.softmax(scores.float(), dim=-1).to(Q.dtype)
-            out = torch.einsum('bhij,bhjd->bhid', attn, V)
-            out = rearrange(out, 'b h t d -> b t (h d)')
+            mask_4d = mask_2d.unsqueeze(0).unsqueeze(0)
+            attn_out = F.scaled_dot_product_attention(Q, K, V, attn_mask=mask_4d)
+            out = rearrange(attn_out, 'b h t d -> b t (h d)')
         
         return self.local_o(out)  # (B, T, d_model)
     
