@@ -227,27 +227,23 @@ class HSELayer(nn.Module):
         else:
             domain_idx = tier1_probs.argmax(dim=-1)            # (N,)
         
-        # ── Tier-2 Routing (Vectorized across domains) ────────────────────────
-        all_t2_indices = torch.empty(N, self.top_k, dtype=torch.long, device=x.device)
-        all_t2_weights = torch.empty(N, self.top_k, dtype=x.dtype, device=x.device)
+        # ── Tier-2 Routing (Zero-sync batched projection + gather) ───────────
+        t2_weights = torch.cat([r.weight for r in self.tier2_routers], dim=0)  # (32, D)
+        t2_all = F.linear(x_flat, t2_weights).view(N, self.n_domains, self.n_experts_per_domain)
         
-        for d in range(self.n_domains):
-            d_mask = (domain_idx == d)
-            n_d = d_mask.sum().item()
-            if n_d == 0:
-                continue
-            x_d = x_flat[d_mask]
-            t2_logits = self.tier2_routers[d](x_d)
-            probs = F.softmax(t2_logits, dim=-1)
-            w, topk_idx = probs.topk(self.top_k, dim=-1)
-            w = w / (w.sum(-1, keepdim=True) + 1e-9)
-            all_t2_indices[d_mask] = topk_idx + (d * self.n_experts_per_domain)
-            all_t2_weights[d_mask] = w.to(x.dtype)
-            
+        d_expanded = domain_idx.view(N, 1, 1).expand(-1, 1, self.n_experts_per_domain)
+        t2_logits = torch.gather(t2_all, 1, d_expanded).squeeze(1)  # (N, 8)
+        
+        t2_probs = F.softmax(t2_logits, dim=-1)
+        w, topk_idx = t2_probs.topk(self.top_k, dim=-1)
+        w = (w / (w.sum(-1, keepdim=True) + 1e-9)).to(x.dtype)
+        
+        global_exp_idx = topk_idx + (domain_idx.unsqueeze(-1) * self.n_experts_per_domain)  # (N, 2)
+        
         # ── Vectorized Token-Expert Dispatch ──────────────────────────────────
-        flat_exp_ids = all_t2_indices.reshape(-1)
+        flat_exp_ids = global_exp_idx.reshape(-1)
         flat_tokens = torch.arange(N, device=x.device).unsqueeze(1).expand(-1, self.top_k).reshape(-1)
-        flat_weights = all_t2_weights.reshape(-1, 1)
+        flat_weights = w.reshape(-1, 1)
         
         sort_perm = torch.argsort(flat_exp_ids)
         sorted_exp = flat_exp_ids[sort_perm]

@@ -86,10 +86,9 @@ class PretrainEngine:
 
         from training.gpu_optimizer import GPUMemoryMonitor, ThroughputMeter
         self.memory_monitor = GPUMemoryMonitor(self.device, oom_threshold_gb=8.0)
-        # FORGE-1B: 6 × ~593M active params (after MoE sparsity) ≈ 3.56B FLOPs/token
-        # Full param count ≈ 991.6M (<= 1.0B), active per step ≈ 593M (2/32 experts active)
+        # FORGE-1B: 6 × 991.6M params = 5.95B FLOPs/token
         self.throughput_meter = ThroughputMeter(
-            model_flops_per_token=6 * 593_000_000,  # 6 × 593M active params
+            model_flops_per_token=6 * 991_603_662,
             device=self.device,
             world_size=world_size,
         )
