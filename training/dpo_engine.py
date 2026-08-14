@@ -511,7 +511,7 @@ class DPOEngine:
                         torch.save(self.policy.state_dict(), str(ckpt_dir / "model.pt"))
                     logger.info(f"DPO checkpoint saved: {ckpt_dir}")
                     # Upload checkpoint
-                    upload_folder_async(str(ckpt_dir), repo_name="forge-3b-dpo", folder_in_repo=ckpt_dir.name)
+                    upload_folder_async(str(ckpt_dir), repo_name="forge-1b-dpo", folder_in_repo=ckpt_dir.name)
         
         # Save final
         if self.is_main:
@@ -520,7 +520,7 @@ class DPOEngine:
             torch.save(self.policy.state_dict(), str(final_dir / "model.pt"))
             self.tokenizer.save_pretrained(str(final_dir))
             # Upload final model
-            upload_folder_async(str(final_dir), repo_name="forge-3b-dpo", folder_in_repo="final")
+            upload_folder_async(str(final_dir), repo_name="forge-1b-dpo", folder_in_repo="final")
         
         elapsed_h = (time.time() - self._start_time) / 3600
         final_acc = sum(all_accuracies) / max(1, len(all_accuracies))
