@@ -32,16 +32,22 @@ if torch.cuda.is_available():
     except Exception:
         pass
 
-# NCCL tuning for multi-GPU
-os.environ.setdefault("NCCL_MIN_NCHANNELS", "4")
-os.environ.setdefault("NCCL_NSOCKS_PERTHREAD", "4")
-os.environ.setdefault("NCCL_SOCKET_NTHREADS", "4")
-os.environ.setdefault("NCCL_IB_DISABLE", "0")
-os.environ.setdefault("NCCL_P2P_DISABLE", "0")
+# NCCL tuning for 64x H100 GPU cluster (8x 8-GPU nodes via NVLink + 3.2 Tbps InfiniBand)
+os.environ.setdefault("NCCL_MIN_NCHANNELS", "32")
+os.environ.setdefault("NCCL_MAX_NCHANNELS", "64")
+os.environ.setdefault("NCCL_NSOCKS_PERTHREAD", "8")
+os.environ.setdefault("NCCL_SOCKET_NTHREADS", "8")
+os.environ.setdefault("NCCL_BUFFSIZE", "16777216")      # 16MB ring buffer for high-bandwidth AllReduce
+os.environ.setdefault("NCCL_NET_GDR_LEVEL", "5")        # GPUDirect RDMA Level 5 for NVLink + InfiniBand
+os.environ.setdefault("NCCL_CROSS_NIC", "1")            # Multi-NIC rail-optimized routing
+os.environ.setdefault("NCCL_IB_DISABLE", "0")           # InfiniBand enabled
+os.environ.setdefault("NCCL_P2P_DISABLE", "0")          # NVLink P2P enabled
+os.environ.setdefault("NCCL_NVLS_ENABLE", "1")          # NVLink SHARP collective offload
+os.environ.setdefault("CUDA_DEVICE_MAX_CONNECTIONS", "1") # Precise CUDA stream scheduling
 
 # CUDA memory allocator — reduce fragmentation for large model + optimizer states
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF",
-    "max_split_size_mb:128,garbage_collection_threshold:0.8")
+    "expandable_segments:True,max_split_size_mb:128,garbage_collection_threshold:0.8")
 
 # Tokenizer parallelism — disable HF tokenizer parallelism (we use CRAYON)
 os.environ["TOKENIZERS_PARALLELISM"] = "false"

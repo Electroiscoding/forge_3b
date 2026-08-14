@@ -45,13 +45,31 @@ PHASE3_MICRO_BATCH="${PHASE3_MICRO_BATCH:-8}"    # 8 seqs × 4096 = 32,768 token
 SAVE_EVERY="${SAVE_EVERY:-1000000000}"           # checkpoint every 1B tokens
 LOG_EVERY="${LOG_EVERY:-1}"                      # log EVERY step (full metric visibility)
 
-# ── Infrastructure ─────────────────────────────────────────────────────────────
-NUM_GPUS="${NUM_GPUS:-1}"                        # 1x H100 default; set to 16 for cluster
+# ── Infrastructure (Single-GPU, 8x GPU node, or 64x GPU multi-node cluster) ──
+NUM_GPUS="${NUM_GPUS:-64}"                       # 64x H100 GPUs default for massive scale
+NNODES="${NNODES:-8}"                            # 8 nodes (8 GPUs per node = 64 GPUs)
+NODE_RANK="${NODE_RANK:-0}"                      # Node rank (0 for master node, 1..7 for workers)
+MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"          # Master node IP
+MASTER_PORT="${MASTER_PORT:-29500}"
 SEED="${SEED:-42}"
 
-# ── Launcher: prefer torchrun (no DeepSpeed needed for 1B) ────────────────────
+# ── Dynamic Batch Sizing for 64x GPUs ──────────────────────────────────────────
+# On 64x GPUs, 1 micro-step of 16 seqs × 2048 × 64 GPUs = 2,097,152 tokens per pass!
+# We set Phase 2 global batch to 2,097,152 tokens (1 accumulation step per gradient sync)!
+if [ "$NUM_GPUS" -ge 64 ]; then
+    BATCH_TOKENS="${BATCH_TOKENS:-2097152}"      # 2.1M tokens per global step
+    PHASE1_BATCH="${PHASE1_BATCH:-2097152}"
+    PHASE3_BATCH="${PHASE3_BATCH:-2097152}"
+fi
+
+# ── Launcher: high-throughput distributed torchrun ─────────────────────────────
 if command -v torchrun &>/dev/null; then
-    LAUNCHER="torchrun --nproc_per_node=${NUM_GPUS} --master_port=29500"
+    if [ "$NNODES" -gt 1 ]; then
+        GPUS_PER_NODE=$(( NUM_GPUS / NNODES ))
+        LAUNCHER="torchrun --nnodes=${NNODES} --nproc_per_node=${GPUS_PER_NODE} --node_rank=${NODE_RANK} --master_addr=${MASTER_ADDR} --master_port=${MASTER_PORT}"
+    else
+        LAUNCHER="torchrun --nproc_per_node=${NUM_GPUS} --master_port=${MASTER_PORT}"
+    fi
 else
     echo "[ERROR] torchrun not found. Install PyTorch >= 2.0."
     exit 1

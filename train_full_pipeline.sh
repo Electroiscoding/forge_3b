@@ -126,8 +126,25 @@ cfg_path.write_text(json.dumps(cfg, indent=2))
 print(f"  ds_zero3.json → train_micro_batch_size_per_gpu={$MICRO_BATCH}")
 PYEOF
 
-# ── DeepSpeed launcher helper ─────────────────────────────────────────────────
-DS_LAUNCH="deepspeed --num_gpus=$NUM_GPUS"
+# ── High-Throughput Cluster Launcher (torchrun or deepspeed) ─────────────────
+NNODES="${NNODES:-1}"
+NODE_RANK="${NODE_RANK:-0}"
+MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
+MASTER_PORT="${MASTER_PORT:-29500}"
+
+if command -v torchrun &>/dev/null; then
+  if [ "$NNODES" -gt 1 ]; then
+    GPUS_PER_NODE=$(( NUM_GPUS / NNODES ))
+    CLUSTER_LAUNCH="torchrun --nnodes=${NNODES} --nproc_per_node=${GPUS_PER_NODE} --node_rank=${NODE_RANK} --master_addr=${MASTER_ADDR} --master_port=${MASTER_PORT}"
+  else
+    CLUSTER_LAUNCH="torchrun --nproc_per_node=${NUM_GPUS} --master_port=${MASTER_PORT}"
+  fi
+elif command -v deepspeed &>/dev/null; then
+  CLUSTER_LAUNCH="deepspeed --num_gpus=$NUM_GPUS"
+else
+  echo "[ERROR] Neither torchrun nor deepspeed found."
+  exit 1
+fi
 
 # ── Helper: print stage banner ────────────────────────────────────────────────
 banner() {
@@ -155,7 +172,7 @@ else
     exit 1
   fi
 
-  $DS_LAUNCH "$SCRIPT_DIR/run_pretrain.py" \
+  $CLUSTER_LAUNCH "$SCRIPT_DIR/run_pretrain.py" \
     --data_dir          "$PRETRAIN_DATA" \
     --output_dir        "$PRETRAIN_OUT" \
     --micro_batch_per_gpu "$MICRO_BATCH" \
@@ -190,7 +207,7 @@ else
     exit 1
   fi
 
-  $DS_LAUNCH "$SCRIPT_DIR/run_sft.py" \
+  $CLUSTER_LAUNCH "$SCRIPT_DIR/run_sft.py" \
     --base_model    "$PRETRAIN_FINAL" \
     --data_dir      "$SFT_DATA" \
     --output_dir    "$SFT_OUT" \
@@ -216,7 +233,7 @@ if [[ -z "$DPO_DATA" ]]; then
 fi
 
 # run_dpo.py now accepts a directory and auto-merges JSONL files internally
-$DS_LAUNCH "$SCRIPT_DIR/run_dpo.py" \
+$CLUSTER_LAUNCH "$SCRIPT_DIR/run_dpo.py" \
   --base_model    "$SFT_FINAL" \
   --data_path     "$DPO_DATA" \
   --output_dir    "$DPO_OUT" \

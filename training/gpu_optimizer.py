@@ -103,9 +103,13 @@ def setup_distributed(
     if hasattr(torch.backends.cuda, "enable_mem_efficient_sdp"):
         torch.backends.cuda.enable_mem_efficient_sdp(True)
     
-    # NCCL environment tuning for NVLink
-    os.environ["NCCL_MIN_NCHANNELS"] = str(min(world_size * 2, 8))
-    os.environ["NCCL_CROSS_NIC"] = "0"
+    # NCCL environment tuning for 64x H100 GPU cluster (NVLink + InfiniBand)
+    os.environ["NCCL_MIN_NCHANNELS"] = str(min(world_size * 2, 64))
+    os.environ["NCCL_MAX_NCHANNELS"] = "64"
+    os.environ["NCCL_CROSS_NIC"] = "1"
+    os.environ["NCCL_BUFFSIZE"] = "16777216"
+    os.environ["NCCL_NET_GDR_LEVEL"] = "5"
+    os.environ["NCCL_NVLS_ENABLE"] = "1"
     
     logger.info(f"Distributed initialized: rank={rank}/{world_size}, local={local_rank}")
     return rank, world_size, local_rank

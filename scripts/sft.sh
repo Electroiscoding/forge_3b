@@ -27,20 +27,28 @@ GLOBAL_BATCH_TOKENS="${GLOBAL_BATCH_TOKENS:-524288}"   # 512K tokens
 GRAD_CLIP="${GRAD_CLIP:-0.5}"
 SAVE_EVERY="${SAVE_EVERY:-100}"              # steps
 
-# ── Infrastructure ────────────────────────────────────────────────────────────
-NUM_GPUS="${NUM_GPUS:-1}"
+# ── Infrastructure (64x H100 GPU cluster) ────────────────────────────────────
+NUM_GPUS="${NUM_GPUS:-64}"
+NNODES="${NNODES:-8}"
+NODE_RANK="${NODE_RANK:-0}"
+MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
+MASTER_PORT="${MASTER_PORT:-29501}"
 DS_CONFIG="${DS_CONFIG:-./configs/ds_zero3_sft.json}"
 SEED="${SEED:-42}"
 TOKENIZER_PROFILE="${TOKENIZER_PROFILE:-standard}"
 
 # ── Launcher ──────────────────────────────────────────────────────────────────
-if command -v deepspeed &>/dev/null; then
+if command -v torchrun &>/dev/null; then
+    if [ "$NNODES" -gt 1 ]; then
+        GPUS_PER_NODE=$(( NUM_GPUS / NNODES ))
+        LAUNCHER="torchrun --nnodes=${NNODES} --nproc_per_node=${GPUS_PER_NODE} --node_rank=${NODE_RANK} --master_addr=${MASTER_ADDR} --master_port=${MASTER_PORT}"
+    else
+        LAUNCHER="torchrun --nproc_per_node=${NUM_GPUS} --master_port=${MASTER_PORT}"
+    fi
+elif command -v deepspeed &>/dev/null; then
     LAUNCHER="deepspeed --num_gpus=${NUM_GPUS}"
-elif command -v torchrun &>/dev/null; then
-    echo "[WARNING] deepspeed not found — using torchrun"
-    LAUNCHER="torchrun --nproc_per_node=${NUM_GPUS} --master_port=29501"
 else
-    echo "[ERROR] Neither deepspeed nor torchrun found."
+    echo "[ERROR] Neither torchrun nor deepspeed found."
     exit 1
 fi
 
