@@ -98,6 +98,7 @@ ${LAUNCHER} run_pretrain.py \
     ${WANDB_ENTITY:+--wandb_entity "$WANDB_ENTITY"} \
     --seed                "$SEED"              \
     --bf16                                     \
+    --no_compile                               \
     --num_gpus            "$NUM_GPUS"          \
     2>&1 | tee "$LOG_FILE"
 
