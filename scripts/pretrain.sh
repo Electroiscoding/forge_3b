@@ -38,10 +38,10 @@ LR_MAX="${LR_MAX:-3e-4}"
 BATCH_TOKENS="${BATCH_TOKENS:-1048576}"          # 1M tokens per global step (Phase 2)
 PHASE1_BATCH="${PHASE1_BATCH:-524288}"           # 512K tokens per step   (Phase 1)
 PHASE3_BATCH="${PHASE3_BATCH:-524288}"           # 512K tokens per step   (Phase 3)
-MICRO_BATCH="${MICRO_BATCH:-24}"                 # fallback micro batch
+MICRO_BATCH="${MICRO_BATCH:-12}"                 # fallback micro batch
 PHASE1_MICRO_BATCH="${PHASE1_MICRO_BATCH:-64}"   # 64 seqs × 512 = 32,768 tokens/step
-PHASE2_MICRO_BATCH="${PHASE2_MICRO_BATCH:-24}"   # 24 seqs × 2048 = 49,152 tokens/step
-PHASE3_MICRO_BATCH="${PHASE3_MICRO_BATCH:-12}"   # 12 seqs × 4096 = 49,152 tokens/step
+PHASE2_MICRO_BATCH="${PHASE2_MICRO_BATCH:-12}"   # 12 seqs × 2048 = 24,576 tokens/step
+PHASE3_MICRO_BATCH="${PHASE3_MICRO_BATCH:-6}"    # 6 seqs × 4096 = 24,576 tokens/step
 SAVE_EVERY="${SAVE_EVERY:-1000000000}"           # checkpoint every 1B tokens
 LOG_EVERY="${LOG_EVERY:-1}"                      # log EVERY step (full metric visibility)
 
