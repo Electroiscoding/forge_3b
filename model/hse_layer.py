@@ -242,7 +242,7 @@ class HSELayer(nn.Module):
             w, topk_idx = probs.topk(self.top_k, dim=-1)
             w = w / (w.sum(-1, keepdim=True) + 1e-9)
             all_t2_indices[d_mask] = topk_idx + (d * self.n_experts_per_domain)
-            all_t2_weights[d_mask] = w
+            all_t2_weights[d_mask] = w.to(x.dtype)
             
         # ── Vectorized Token-Expert Dispatch ──────────────────────────────────
         flat_exp_ids = all_t2_indices.reshape(-1)
