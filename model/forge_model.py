@@ -379,27 +379,46 @@ class ForgeModel(nn.Module):
         # ── Final Norm ────────────────────────────────────────────────────────
         h = self.norm_final(h)  # (B, T, d_model)
         
-        # ── LM Head ───────────────────────────────────────────────────────────
-        logits = self.lm_head(h).float()  # (B, T, vocab_size) — FP32 for numerical stability
-        
-        # ── Loss Computation ──────────────────────────────────────────────────
+        # ── LM Head & Loss Computation ────────────────────────────────────────
         loss = None
         if labels is not None:
             # Shift for next-token prediction
-            shift_logits = logits[:, :-1, :].contiguous()
-            shift_labels = labels[:, 1:].contiguous()
+            shift_h = h[:, :-1, :].contiguous()
+            shift_labels = labels[:, 1:].contiguous().reshape(-1)
             
-            # Cross-entropy loss (ignore -100 and padding)
-            ce_loss = F.cross_entropy(
-                shift_logits.reshape(-1, shift_logits.shape[-1]),
-                shift_labels.reshape(-1),
-                ignore_index=-100,
-                reduction="mean",
-            )
+            # Chunked LM head projection to prevent allocating massive (B, T, 206464) FP32 tensor in VRAM
+            shift_h_flat = shift_h.reshape(-1, shift_h.shape[-1])
+            chunk_size = 4096
+            n_tokens = shift_h_flat.shape[0]
+            total_ce_loss = 0.0
+            valid_tokens = 0
             
-            # Average aux loss over HSE layers
+            for i in range(0, n_tokens, chunk_size):
+                h_chunk = shift_h_flat[i : i + chunk_size]
+                labels_chunk = shift_labels[i : i + chunk_size]
+                
+                # Check for valid tokens
+                mask = (labels_chunk != -100)
+                n_valid = mask.sum().item()
+                if n_valid == 0:
+                    continue
+                
+                logits_chunk = self.lm_head(h_chunk).float()
+                chunk_loss = F.cross_entropy(
+                    logits_chunk,
+                    labels_chunk,
+                    ignore_index=-100,
+                    reduction="sum",
+                )
+                total_ce_loss = total_ce_loss + chunk_loss
+                valid_tokens += n_valid
+            
+            ce_loss = total_ce_loss / max(1, valid_tokens) if valid_tokens > 0 else (shift_h.sum() * 0.0)
             avg_aux = total_aux_loss / max(1, n_hse_layers)
             loss = ce_loss + avg_aux
+            logits = None if self.training else self.lm_head(h)
+        else:
+            logits = self.lm_head(h)
         
         output = {
             "loss": loss,
