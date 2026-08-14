@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# FORGE-3B DPO (Direct Preference Optimization) Launch Script
+# FORGE-1B DPO (Direct Preference Optimization) Launch Script
 # Runs AFTER SFT is complete (uses the sft/final/ checkpoint).
 # =============================================================================
 set -euo pipefail
@@ -9,19 +9,19 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-BASE_MODEL="${BASE_MODEL:-/workspace/checkpoints/forge_3b_sft/final}"
+BASE_MODEL="${BASE_MODEL:-/workspace/checkpoints/forge_1b_sft/final}"
 DATA_PATH="${DATA_PATH:-/workspace/data/dpo/preferences.jsonl}"
-OUTPUT_DIR="${OUTPUT_DIR:-/workspace/checkpoints/forge_3b_dpo}"
+OUTPUT_DIR="${OUTPUT_DIR:-/workspace/checkpoints/forge_1b_dpo}"
 RESUME_FROM="${RESUME_FROM:-}"
 
-WANDB_PROJECT="${WANDB_PROJECT:-forge_3b_dpo}"
+WANDB_PROJECT="${WANDB_PROJECT:-forge_1b_dpo}"
 WANDB_ENTITY="${WANDB_ENTITY:-}"
 
 # ── DPO hyperparams ───────────────────────────────────────────────────────────
 BETA="${BETA:-0.1}"
 LOSS_TYPE="${LOSS_TYPE:-dpo}"        # dpo | ipo | cdpo
 N_EPOCHS="${N_EPOCHS:-1}"
-BATCH_PAIRS="${BATCH_PAIRS:-16}"     # preference pairs per GPU step
+BATCH_PAIRS="${BATCH_PAIRS:-8}"     # preference pairs per GPU step
 GA_STEPS="${GA_STEPS:-4}"           # gradient accumulation steps
 SEQ_LEN="${SEQ_LEN:-4096}"
 LR="${LR:-5e-7}"
@@ -29,7 +29,7 @@ GRAD_CLIP="${GRAD_CLIP:-0.3}"
 SAVE_EVERY="${SAVE_EVERY:-100}"
 
 # ── Infrastructure ────────────────────────────────────────────────────────────
-NUM_GPUS="${NUM_GPUS:-16}"
+NUM_GPUS="${NUM_GPUS:-1}"
 DS_CONFIG="${DS_CONFIG:-./configs/ds_zero3_sft.json}"
 SEED="${SEED:-42}"
 TOKENIZER_PROFILE="${TOKENIZER_PROFILE:-standard}"

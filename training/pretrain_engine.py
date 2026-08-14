@@ -86,10 +86,10 @@ class PretrainEngine:
 
         from training.gpu_optimizer import GPUMemoryMonitor, ThroughputMeter
         self.memory_monitor = GPUMemoryMonitor(self.device, oom_threshold_gb=8.0)
-        # FORGE-1B: 6 × ~850M active params (after MoE sparsity) = 5.1B FLOPs/token
-        # Full param count ≈ 1.06B, active per step ≈ 850M (2/32 experts active)
+        # FORGE-1B: 6 × ~593M active params (after MoE sparsity) ≈ 3.56B FLOPs/token
+        # Full param count ≈ 991.6M (<= 1.0B), active per step ≈ 593M (2/32 experts active)
         self.throughput_meter = ThroughputMeter(
-            model_flops_per_token=6 * 850_000_000,  # 6 × 850M active params
+            model_flops_per_token=6 * 593_000_000,  # 6 × 593M active params
             device=self.device,
             world_size=world_size,
         )
@@ -148,7 +148,7 @@ class PretrainEngine:
             f"Checkpoint saved: {ckpt_dir} "
             f"(${meta['cost_usd']:.2f} spent, ${meta['budget_remaining_usd']:.2f} remaining)"
         )
-        upload_folder_async(str(ckpt_dir), repo_name="forge-3b-pretrain", folder_in_repo=ckpt_dir.name)
+        upload_folder_async(str(ckpt_dir), repo_name="forge-1b-pretrain", folder_in_repo=ckpt_dir.name)
         self._rotate_checkpoints()
 
     def _rotate_checkpoints(self):

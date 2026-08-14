@@ -7,16 +7,24 @@ import os
 os.environ["FORGE_NO_TRITON"] = "1"
 
 from config import ForgeModelConfig
-from model.forge_model import build_forge_3b
+from model.forge_model import build_forge_1b
 
 
 def main():
     torch.manual_seed(0)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+
     cfg = ForgeModelConfig()
-    model = build_forge_3b(cfg).cuda().to(torch.bfloat16)
+    print(f"Building FORGE-1B on {device} ({dtype})...")
+    model = build_forge_1b(cfg).to(device).to(dtype)
     model.eval()
 
-    input_ids = torch.randint(0, cfg.vocab_size, (1, 32)).cuda()
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"Total Parameters: {total_params:,} ({total_params/1e9:.4f}B)")
+    assert total_params <= 1_000_000_000, f"Total parameters {total_params:,} exceeds 1.0B max limit!"
+
+    input_ids = torch.randint(0, cfg.vocab_size, (1, 32), device=device)
 
     with torch.no_grad():
         h = model.embed_tokens(input_ids)
@@ -39,6 +47,7 @@ def main():
         w = model.lm_head.weight
         print(f"lm_head weight: min={w.min().item():.4f} max={w.max().item():.4f} std={w.std().item():.4f}")
         print(f"tied to embedding: {model.lm_head.weight is model.embed_tokens.weight}")
+        print("\nSMOKE TEST PASSED!")
 
 
 if __name__ == "__main__":

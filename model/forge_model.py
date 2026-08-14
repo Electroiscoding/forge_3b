@@ -36,29 +36,29 @@ class ForgeBlock(nn.Module):
         is_mha: bool,
         is_hse: bool,
         # ARG config
-        arg_d_inner: int = 2048,
-        arg_d_state: int = 64,
-        arg_d_rank: int = 64,
+        arg_d_inner: int = 1280,
+        arg_d_state: int = 48,
+        arg_d_rank: int = 48,
         arg_conv_kernel: int = 4,
         arg_local_window: int = 64,
         arg_local_n_heads: int = 8,
         arg_local_n_kv_heads: int = 2,
-        arg_head_dim: int = 128,
+        arg_head_dim: int = 80,
         # MHA config
         mha_n_heads: int = 16,
         mha_n_kv_heads: int = 4,
-        mha_head_dim: int = 128,
+        mha_head_dim: int = 80,
         rope_base: float = 500_000.0,
         rope_scaling_type: Optional[str] = None,
         rope_scaling_factor: float = 1.0,
         max_seq_len: int = 4096,
         # Dense FFN config
-        dense_d_ff: int = 5504,
+        dense_d_ff: int = 3200,
         # HSE config
         hse_n_domains: int = 4,
         hse_n_experts_per_domain: int = 8,
         hse_top_k: int = 2,
-        hse_d_ff_expert: int = 512,
+        hse_d_ff_expert: int = 288,
         hse_capacity_factor: float = 1.25,
         hse_expert_dropout: float = 0.1,
         hse_aux_loss_alpha: float = 0.01,
@@ -242,7 +242,10 @@ class ForgeModel(nn.Module):
         self.gradient_checkpointing_enabled = config.use_gradient_checkpointing
         self.gradient_checkpointing_ratio = config.gradient_checkpointing_ratio
         # Checkpoint every N-th layer
-        self._checkpoint_interval = max(1, int(1.0 / config.gradient_checkpointing_ratio))
+        if config.gradient_checkpointing_ratio > 0:
+            self._checkpoint_interval = max(1, int(1.0 / config.gradient_checkpointing_ratio))
+        else:
+            self._checkpoint_interval = 1
         
         # Apply weight initialization
         self._init_weights()
@@ -522,10 +525,15 @@ class ForgeModel(nn.Module):
         return counts
 
 
-def build_forge_3b(config=None) -> ForgeModel:
-    """Build FORGE-3B from config (or default config)."""
+def build_forge_1b(config=None) -> ForgeModel:
+    """Build FORGE-1B (<= 1.0B total params) from config (or default config)."""
     from config import ForgeModelConfig
     if config is None:
         config = ForgeModelConfig()
     model = ForgeModel(config)
     return model
+
+
+def build_forge_3b(config=None) -> ForgeModel:
+    """Alias for build_forge_1b (FORGE architecture downgraded to 1B max params)."""
+    return build_forge_1b(config)

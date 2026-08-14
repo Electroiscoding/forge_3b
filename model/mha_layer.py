@@ -33,10 +33,10 @@ class GlobalMHALayer(nn.Module):
     
     def __init__(
         self,
-        d_model: int = 2048,
+        d_model: int = 1280,
         n_heads: int = 16,
         n_kv_heads: int = 4,
-        head_dim: int = 128,
+        head_dim: int = 80,
         rope_base: float = 500_000.0,
         rope_scaling_type: Optional[str] = None,
         rope_scaling_factor: float = 1.0,

@@ -10,7 +10,7 @@ logging.basicConfig(level=logging.INFO, format="[%(asctime)s][%(levelname)s] %(m
 logger = logging.getLogger(__name__)
 
 def get_args():
-    parser = argparse.ArgumentParser(description="Run inference on FORGE-3B using a trained model checkpoint")
+    parser = argparse.ArgumentParser(description="Run inference on FORGE-1B using a trained model checkpoint")
     parser.add_argument("--model_path", type=str, required=True,
                         help="Path to the trained model directory containing config, tokenizer, and weights")
     parser.add_argument("--prompt", type=str, default="The future of artificial intelligence is",
@@ -59,9 +59,9 @@ def main():
     model_config.vocab_size = tokenizer.vocab_size
     
     # 3. Build Model
-    from model.forge_model import build_forge_3b
+    from model.forge_model import build_forge_1b
     logger.info("Building FORGE model...")
-    model = build_forge_3b(model_config)
+    model = build_forge_1b(model_config)
     
     # 4. Load Model Weights
     loaded_weights = False

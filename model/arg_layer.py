@@ -49,15 +49,15 @@ class ARGLayer(nn.Module):
     
     def __init__(
         self,
-        d_model: int = 2048,
-        d_inner: int = 2048,
-        d_state: int = 64,
-        d_rank: int = 64,
+        d_model: int = 1280,
+        d_inner: int = 1280,
+        d_state: int = 48,
+        d_rank: int = 48,
         conv_kernel: int = 4,
         local_window: int = 64,
         local_n_heads: int = 8,
         local_n_kv_heads: int = 2,
-        head_dim: int = 128,
+        head_dim: int = 80,
         norm_type: str = "dgn",
         dgn_n_groups: int = 16,
         norm_eps: float = 1e-6,
@@ -228,17 +228,37 @@ class ARGLayer(nn.Module):
         # selective_scan_fn fuses: discretization, scan, z-gate, skip-connection D
         # CPB initial state (h0): selective_scan_fn assumes zero initial state.
         # The learned dt/A/B/C will naturally handle context boundaries.
-        y = selective_scan_fn(
-            x_conv,                                  # u:     (B, d_inner, T)
-            dt,                                      # delta: (B, d_inner, T), raw
-            A,                                       # A:     (d_inner, d_state), negative
-            B_ssm,                                   # B:     (B, d_state, T)
-            C_ssm,                                   # C:     (B, d_state, T)
-            self.D.float(),                          # D:     (d_inner,) skip connection
-            z=rearrange(z, 'b t d -> b d t').contiguous(),  # z: (B, d_inner, T) gate
-            delta_bias=self.dt_proj.bias.float(),    # dt bias, added before softplus
-            delta_softplus=True,                     # apply softplus inside kernel
-        )                                            # returns (B, d_inner, T), gated with z
+        if x_conv.is_cuda and MAMBA_SSM_AVAILABLE:
+            y = selective_scan_fn(
+                x_conv,                                  # u:     (B, d_inner, T)
+                dt,                                      # delta: (B, d_inner, T), raw
+                A,                                       # A:     (d_inner, d_state), negative
+                B_ssm,                                   # B:     (B, d_state, T)
+                C_ssm,                                   # C:     (B, d_state, T)
+                self.D.float(),                          # D:     (d_inner,) skip connection
+                z=rearrange(z, 'b t d -> b d t').contiguous(),  # z: (B, d_inner, T) gate
+                delta_bias=self.dt_proj.bias.float(),    # dt bias, added before softplus
+                delta_softplus=True,                     # apply softplus inside kernel
+            )                                            # returns (B, d_inner, T), gated with z
+        else:
+            delta = F.softplus(dt + self.dt_proj.bias.float().view(1, -1, 1))
+            B_sz, d_in, T_sz = x_conv.shape
+            d_st = A.shape[1]
+            h = torch.zeros(B_sz, d_in, d_st, device=x_conv.device, dtype=x_conv.dtype)
+            ys = []
+            z_t = rearrange(z, 'b t d -> b d t')
+            for t in range(T_sz):
+                d_t = delta[:, :, t]
+                u_t = x_conv[:, :, t]
+                b_t = B_ssm[:, :, t]
+                c_t = C_ssm[:, :, t]
+                dA = torch.exp(d_t.unsqueeze(-1) * A.unsqueeze(0))
+                dB = d_t.unsqueeze(-1) * b_t.unsqueeze(1)
+                h = h * dA + dB * u_t.unsqueeze(-1)
+                y_t = (h * c_t.unsqueeze(1)).sum(dim=-1) + u_t * self.D
+                y_t = y_t * F.silu(z_t[:, :, t])
+                ys.append(y_t)
+            y = torch.stack(ys, dim=-1)
 
         y = rearrange(y, 'b d t -> b t d')           # (B, T, d_inner)
         return self.out_proj(y)                      # (B, T, d_model)

@@ -41,7 +41,7 @@ logger = logging.getLogger("run_sft")
 # ── CLI Arguments ─────────────────────────────────────────────────────────────
 def _build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="FORGE-3B Supervised Fine-Tuning",
+        description="FORGE-1B Supervised Fine-Tuning",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     # Paths
@@ -49,7 +49,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                    help="Path to the pretrained model checkpoint (final/ dir)")
     p.add_argument("--data_dir",    required=True,
                    help="Dir containing train.jsonl (and optionally val.jsonl)")
-    p.add_argument("--output_dir",  default="./checkpoints/forge_3b_sft")
+    p.add_argument("--output_dir",  default="./checkpoints/forge_1b_sft")
     p.add_argument("--model_config", default=None,
                    help="Path to model_config.json; defaults to base_model/model_config.json")
     p.add_argument("--resume_from", default=None,
@@ -60,8 +60,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--lr_max",             type=float, default=1e-5)
     p.add_argument("--lr_min",             type=float, default=1e-6)
     p.add_argument("--seq_len",            type=int, default=4096)
-    p.add_argument("--micro_batch_per_gpu", type=int, default=1)
-    p.add_argument("--global_batch_tokens", type=int, default=262_144)
+    p.add_argument("--micro_batch_per_gpu", type=int, default=4)
+    p.add_argument("--global_batch_tokens", type=int, default=524_288)
     p.add_argument("--grad_clip",          type=float, default=0.5)
     p.add_argument("--weight_decay",       type=float, default=0.0)
     p.add_argument("--loss_on_prompt",     action="store_true",
@@ -77,11 +77,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--no_compile",       action="store_true")
     p.add_argument("--bf16",             action="store_true", default=True)
     p.add_argument("--no_gradient_checkpointing", action="store_true")
-    p.add_argument("--save_every_steps", type=int, default=200)
+    p.add_argument("--save_every_steps", type=int, default=100)
     p.add_argument("--seed",             type=int, default=42)
 
     # Logging
-    p.add_argument("--wandb_project", default="forge_3b_sft")
+    p.add_argument("--wandb_project", default="forge_1b_sft")
     p.add_argument("--wandb_entity",  default=None)
     p.add_argument("--log_every",     type=int, default=10)
 
@@ -126,7 +126,7 @@ def main():
 
     if is_main:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
-        logger.info(f"FORGE-3B SFT | world_size={world_size} | device={device}")
+        logger.info(f"FORGE-1B SFT | world_size={world_size} | device={device}")
 
     # ── Configs ───────────────────────────────────────────────────────────────
     from config import ForgeModelConfig, SFTConfig
@@ -188,8 +188,8 @@ def main():
     model_config.vocab_size = tokenizer.vocab_size
 
     # ── Model ─────────────────────────────────────────────────────────────────
-    logger.info("Building FORGE-3B model...")
-    from model.forge_model import build_forge_3b
+    logger.info("Building FORGE-1B model...")
+    from model.forge_model import build_forge_1b as build_forge_3b
 
     # Detect if ZeRO Stage 3 is enabled to use deepspeed.zero.Init() context manager (required for tied weights)
     is_zero3 = False

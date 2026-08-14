@@ -21,12 +21,16 @@ import torch
 
 # Allow TF32 for matmuls and convolutions — massive speedup on Ampere/Hopper
 # with negligible precision loss for language model training.
-torch.backends.cuda.matmul.allow_tf32 = True
-torch.backends.cudnn.allow_tf32 = True
-torch.backends.cudnn.benchmark = True          # auto-tune cuDNN kernels
-torch.backends.cuda.enable_flash_sdp(True)     # Flash SDP in PyTorch 2.x
-torch.backends.cuda.enable_mem_efficient_sdp(True)
-torch.backends.cuda.enable_math_sdp(False)     # disable slow math SDP
+if torch.cuda.is_available():
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cudnn.benchmark = True          # auto-tune cuDNN kernels
+    try:
+        torch.backends.cuda.enable_flash_sdp(True)     # Flash SDP in PyTorch 2.x
+        torch.backends.cuda.enable_mem_efficient_sdp(True)
+        torch.backends.cuda.enable_math_sdp(False)     # disable slow math SDP
+    except Exception:
+        pass
 
 # NCCL tuning for multi-GPU
 os.environ.setdefault("NCCL_MIN_NCHANNELS", "4")
@@ -49,12 +53,12 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 @dataclass
 class ForgeModelConfig:
-    """Complete FORGE-1B architecture configuration. ~1.06B active params per token."""
+    """Complete FORGE-1B architecture configuration. 991.6M total params (<= 1.0B)."""
     
     # ── Core Dimensions ──────────────────────────────────────────────────────
     vocab_size: int = 206_464          # CRAYON standard profile (206,373) padded to ×128
-    d_model: int = 1536               # 1B: 1536 (was 2048 for 3B)
-    n_layers: int = 24                # 1B: 24   (was 36 for 3B)
+    d_model: int = 1280               # 1B: 1280 (<= 1.0B total params)
+    n_layers: int = 24                # 1B: 24 layers (18 ARG + 6 MHA)
     max_seq_len: int = 4096
     
     # ── Layer Distribution ────────────────────────────────────────────────────
@@ -65,32 +69,32 @@ class ForgeModelConfig:
     hse_ffn_layer_indices: List[int] = field(default_factory=lambda: list(range(0,24,2)))
     
     # ── ARG (Adaptive Recurrent Gating) ──────────────────────────────────────
-    arg_d_inner: int = 1536           # matches d_model for 1B
+    arg_d_inner: int = 1280           # matches d_model for 1B
     arg_d_state: int = 48
     arg_d_rank: int = 48               # dt projection rank
     arg_conv_kernel: int = 4
     arg_local_window: int = 64         # local attention window (phase 1+2)
     arg_local_n_heads: int = 8
     arg_local_n_kv_heads: int = 2
-    arg_head_dim: int = 96            # 1536/16 heads
+    arg_head_dim: int = 80            # 1280 / 16 heads
     arg_scalar_gate: bool = True       # scalar gate per token (vs d_model-dim)
     
     # ── MHA (Multi-Head Attention) ────────────────────────────────────────────
     mha_n_heads: int = 16
     mha_n_kv_heads: int = 4            # GQA: 4:1 ratio
-    mha_head_dim: int = 96            # 1536/16 heads
+    mha_head_dim: int = 80            # 1280 / 16 heads
     rope_theta: float = 500_000.0      # long-context RoPE base
     rope_scaling_type: Optional[str] = None  # None | "yarn"
     rope_scaling_factor: float = 1.0
     
     # ── Dense FFN (SwiGLU) ────────────────────────────────────────────────────
-    dense_d_ff: int = 4096             # ≈ 2.67 × d_model, multiple of 128
+    dense_d_ff: int = 3200             # 2.5 × d_model, multiple of 128
     
     # ── HSE FFN (Hierarchical Sparse Expert) ──────────────────────────────────
     hse_n_domains: int = 4
     hse_n_experts_per_domain: int = 8  # total 32 experts
     hse_top_k: int = 2                 # active per token
-    hse_d_ff_expert: int = 384        # scaled for 1B
+    hse_d_ff_expert: int = 288        # scaled for <= 1.0B total params
     hse_capacity_factor: float = 1.25
     hse_expert_dropout: float = 0.1
     hse_aux_loss_alpha: float = 0.01
@@ -100,7 +104,7 @@ class ForgeModelConfig:
     
     # ── Normalization ─────────────────────────────────────────────────────────
     norm_type: str = "dgn"             # "dgn" or "rmsnorm"
-    dgn_n_groups: int = 16
+    dgn_n_groups: int = 16            # 1280 / 16 = 80 per group
     norm_eps: float = 1e-6
     
     # ── Initialization ────────────────────────────────────────────────────────
@@ -115,7 +119,7 @@ class ForgeModelConfig:
     bos_token_id: int = 1
     eos_token_id: int = 2
     
-    # ── Compile/Optimization Flags ────────────────────────────────────────────
+    # ── Compile/Optimization Flags ────────────────────────────────────
     use_flash_attention: bool = True
     use_triton_kernels: bool = True    # Triton fused ops
     use_torch_compile: bool = True

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# FORGE-3B Supervised Fine-Tuning Launch Script
+# FORGE-1B Supervised Fine-Tuning Launch Script
 # Runs AFTER pretraining is complete (uses the final/ checkpoint).
 # =============================================================================
 set -euo pipefail
@@ -9,12 +9,12 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-BASE_MODEL="${BASE_MODEL:-/workspace/checkpoints/forge_3b_pretrain/final}"
+BASE_MODEL="${BASE_MODEL:-/workspace/checkpoints/forge_1b_pretrain/final}"
 DATA_DIR="${DATA_DIR:-/workspace/data/sft}"
-OUTPUT_DIR="${OUTPUT_DIR:-/workspace/checkpoints/forge_3b_sft}"
+OUTPUT_DIR="${OUTPUT_DIR:-/workspace/checkpoints/forge_1b_sft}"
 RESUME_FROM="${RESUME_FROM:-}"
 
-WANDB_PROJECT="${WANDB_PROJECT:-forge_3b_sft}"
+WANDB_PROJECT="${WANDB_PROJECT:-forge_1b_sft}"
 WANDB_ENTITY="${WANDB_ENTITY:-}"
 
 # ── Training hyperparams ──────────────────────────────────────────────────────
@@ -22,13 +22,13 @@ TOTAL_TOKENS="${TOTAL_TOKENS:-1400000000}"    # 1.4B
 LR_MAX="${LR_MAX:-1e-5}"
 LR_MIN="${LR_MIN:-1e-6}"
 SEQ_LEN="${SEQ_LEN:-4096}"
-MICRO_BATCH="${MICRO_BATCH:-1}"
-GLOBAL_BATCH_TOKENS="${GLOBAL_BATCH_TOKENS:-262144}"   # 256K tokens
+MICRO_BATCH="${MICRO_BATCH:-4}"
+GLOBAL_BATCH_TOKENS="${GLOBAL_BATCH_TOKENS:-524288}"   # 512K tokens
 GRAD_CLIP="${GRAD_CLIP:-0.5}"
-SAVE_EVERY="${SAVE_EVERY:-200}"              # steps
+SAVE_EVERY="${SAVE_EVERY:-100}"              # steps
 
 # ── Infrastructure ────────────────────────────────────────────────────────────
-NUM_GPUS="${NUM_GPUS:-16}"
+NUM_GPUS="${NUM_GPUS:-1}"
 DS_CONFIG="${DS_CONFIG:-./configs/ds_zero3_sft.json}"
 SEED="${SEED:-42}"
 TOKENIZER_PROFILE="${TOKENIZER_PROFILE:-standard}"

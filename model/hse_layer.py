@@ -39,8 +39,8 @@ class DenseSwiGLUFFN(nn.Module):
     
     def __init__(
         self,
-        d_model: int = 2048,
-        d_ff: int = 5504,
+        d_model: int = 1280,
+        d_ff: int = 3200,
         norm_type: str = "dgn",
         dgn_n_groups: int = 16,
         norm_eps: float = 1e-6,
@@ -74,11 +74,11 @@ class HSELayer(nn.Module):
     
     def __init__(
         self,
-        d_model: int = 2048,
+        d_model: int = 1280,
         n_domains: int = 4,
         n_experts_per_domain: int = 8,
         top_k: int = 2,
-        d_ff_expert: int = 512,
+        d_ff_expert: int = 288,
         capacity_factor: float = 1.25,
         expert_dropout: float = 0.1,
         aux_loss_alpha: float = 0.01,

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# FORGE-3B  Full Training Pipeline  (Pretrain → SFT → DPO)
+# FORGE-1B  Full Training Pipeline  (Pretrain → SFT → DPO)
 # One command runs all three stages back-to-back.
 #
 # Usage:
@@ -14,12 +14,12 @@
 # Optional:
 #   --workspace       Root dir for all outputs  (default: /workspace)
 #   --num_gpus        Number of GPUs            (default: auto-detect)
-#   --micro_batch     Micro batch per GPU        (default: 1)
+#   --micro_batch     Micro batch per GPU        (default: 8)
 #   --skip_pretrain   Skip pretrain, load from --pretrain_ckpt instead
 #   --skip_sft        Skip SFT, load from --sft_ckpt instead
 #   --pretrain_ckpt   Path to existing pretrain final/ dir  (used with --skip_pretrain)
 #   --sft_ckpt        Path to existing SFT final/ dir       (used with --skip_sft)
-#   --wandb_project   WandB project name        (default: forge_3b)
+#   --wandb_project   WandB project name        (default: forge_1b)
 #   --hf_token        HuggingFace token for uploads
 #   --no_compile      Disable torch.compile (faster startup, slower training)
 #
@@ -28,12 +28,12 @@
 #     --pretrain_data /workspace/data/tokenized \
 #     --sft_data      /workspace/data/sft \
 #     --dpo_data      /workspace/data/dpo \
-#     --num_gpus 1 --micro_batch 1
+#     --num_gpus 1 --micro_batch 8
 #
 # Example — skip pretrain, start from SFT:
 #   bash train_full_pipeline.sh \
 #     --skip_pretrain \
-#     --pretrain_ckpt /workspace/checkpoints/pretrain/final \
+#     --pretrain_ckpt /workspace/checkpoints/forge_1b_pretrain/final \
 #     --sft_data  /workspace/data/sft \
 #     --dpo_data  /workspace/data/dpo
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -63,13 +63,13 @@ fi
 # ── Defaults ─────────────────────────────────────────────────────────────────
 WORKSPACE="/workspace"
 NUM_GPUS=""          # auto-detect below
-MICRO_BATCH=1
+MICRO_BATCH=8
 PRETRAIN_DATA=""
 SFT_DATA=""
 DPO_DATA=""
 PRETRAIN_CKPT=""
 SFT_CKPT=""
-WANDB_PROJECT="forge_3b"
+WANDB_PROJECT="forge_1b"
 HF_TOKEN=""
 SKIP_PRETRAIN=0
 SKIP_SFT=0
@@ -107,9 +107,9 @@ if [[ -z "$NUM_GPUS" ]]; then
 fi
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-PRETRAIN_OUT="$WORKSPACE/checkpoints/forge_3b_pretrain"
-SFT_OUT="$WORKSPACE/checkpoints/forge_3b_sft"
-DPO_OUT="$WORKSPACE/checkpoints/forge_3b_dpo"
+PRETRAIN_OUT="$WORKSPACE/checkpoints/forge_1b_pretrain"
+SFT_OUT="$WORKSPACE/checkpoints/forge_1b_sft"
+DPO_OUT="$WORKSPACE/checkpoints/forge_1b_dpo"
 LOGS_DIR="$WORKSPACE/logs"
 
 mkdir -p "$LOGS_DIR"

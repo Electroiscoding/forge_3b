@@ -47,36 +47,35 @@ logger = logging.getLogger(__name__)
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="FORGE-3B Pretraining")
+    parser = argparse.ArgumentParser(description="FORGE-1B Pretraining")
     
     # Paths
     parser.add_argument("--data_dir", type=str, required=True,
                         help="HF repo string or local directory containing pretraining data domains")
-    parser.add_argument("--output_dir", type=str, default="./checkpoints/forge_3b_pretrain")
+    parser.add_argument("--output_dir", type=str, default="./checkpoints/forge_1b_pretrain")
     parser.add_argument("--resume_from", type=str, default=None)
     
     # Model
-    parser.add_argument("--model_config", type=str, default=None,
-                        help="Path to model config JSON (defaults to FORGE-3B default)")
+    parser.add_argument("--model_config", type=str, default="./configs/forge_1b.json",
+                        help="Path to model config JSON (defaults to FORGE-1B config)")
     parser.add_argument("--tokenizer_profile", type=str, default="standard",
                         choices=["standard", "lite"])
     
     # Training
-    parser.add_argument("--phase1_tokens", type=int, default=5_000_000_000)
-    parser.add_argument("--phase2_tokens", type=int, default=43_000_000_000)
+    parser.add_argument("--phase1_tokens", type=int, default=2_000_000_000)
+    parser.add_argument("--phase2_tokens", type=int, default=16_000_000_000)
     parser.add_argument("--phase3_tokens", type=int, default=2_000_000_000)
     parser.add_argument("--lr_max", type=float, default=3e-4)
-    parser.add_argument("--batch_tokens", type=int, default=2_000_000,
-                        help="Phase 2 global batch size in tokens (default: 2M for 16 GPUs)")
+    parser.add_argument("--batch_tokens", type=int, default=1_048_576,
+                        help="Phase 2 global batch size in tokens (default: 1M for 1B model)")
     parser.add_argument("--phase1_batch_tokens", type=int, default=None,
-                        help="Phase 1 global batch tokens. Defaults to batch_tokens/2. "
-                             "For 1 GPU use ~65536; for 16 GPUs use ~1000000.")
+                        help="Phase 1 global batch tokens. Defaults to batch_tokens/2.")
     parser.add_argument("--phase3_batch_tokens", type=int, default=None,
                         help="Phase 3 global batch tokens. Defaults to batch_tokens/2.")
-    parser.add_argument("--micro_batch_per_gpu", type=int, default=2)
+    parser.add_argument("--micro_batch_per_gpu", type=int, default=8)
     
     # GPU
-    parser.add_argument("--num_gpus", type=int, default=16)
+    parser.add_argument("--num_gpus", type=int, default=1)
     parser.add_argument("--bf16", action="store_true", default=True)
     parser.add_argument("--no_compile", action="store_true",
                         help="Disable torch.compile (required for PyTorch<2.5 / Triton bugs)")
@@ -86,10 +85,10 @@ def parse_args():
     parser.add_argument("--no_gradient_checkpointing", action="store_true")
     
     # Logging
-    parser.add_argument("--wandb_project", type=str, default="forge_3b_pretrain")
+    parser.add_argument("--wandb_project", type=str, default="forge_1b_pretrain")
     parser.add_argument("--wandb_entity", type=str, default=None)
-    parser.add_argument("--log_every", type=int, default=10)
-    parser.add_argument("--save_every_tokens", type=int, default=2_000_000_000)
+    parser.add_argument("--log_every", type=int, default=1)
+    parser.add_argument("--save_every_tokens", type=int, default=1_000_000_000)
     
     # Misc
     parser.add_argument("--seed", type=int, default=42)
@@ -111,7 +110,7 @@ def main():
     
     if is_main:
         logger.info("=" * 70)
-        logger.info("FORGE-3B PRETRAINING")
+        logger.info("FORGE-1B PRETRAINING")
         logger.info(f"  Rank: {rank}/{world_size}")
         logger.info(f"  Device: {device}")
         logger.info(f"  Data: {args.data_dir}")
@@ -184,10 +183,10 @@ def main():
         tokenizer.save_pretrained(str(Path(args.output_dir) / "tokenizer"))
     
     # ── Model ─────────────────────────────────────────────────────────────────
-    logger.info("Building FORGE-3B model...")
-    from model.forge_model import build_forge_3b
+    logger.info("Building FORGE-1B model...")
+    from model.forge_model import build_forge_1b
 
-    model = build_forge_3b(model_config)
+    model = build_forge_1b(model_config)
     model = model.to(device).to(torch.bfloat16 if args.bf16 else torch.float32)
 
     n_params_total = sum(p.numel() for p in model.parameters())
@@ -195,7 +194,7 @@ def main():
     if is_main:
         logger.info(f"Model: {n_params_total / 1e9:.3f}B total params, "
                     f"{n_params_trainable / 1e9:.3f}B trainable")
-        expected_min, expected_max = 2.9e9, 3.1e9
+        expected_min, expected_max = 0.8e9, 1.05e9
         if not (expected_min <= n_params_total <= expected_max):
             logger.warning(
                 f"⚠  Parameter count {n_params_total/1e9:.3f}B is outside the expected "
