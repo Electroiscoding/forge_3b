@@ -34,12 +34,14 @@ PHASE3_TOKENS="${PHASE3_TOKENS:-2000000000}"     # 2B  ctx extension (seq=4096)
 LR_MAX="${LR_MAX:-3e-4}"
 
 # ── Batch sizes — tuned for max H100 throughput ───────────────────────────────
-# micro_batch=8 × seq × world_size = tokens per grad-accum step
-# Phase2 global batch = 1M tokens → grad_accum = 1M/(8×2048×NUM_GPUS)
+# micro_batch=64/24/12 fills H100 80GB VRAM and eliminates Python loop overhead
 BATCH_TOKENS="${BATCH_TOKENS:-1048576}"          # 1M tokens per global step (Phase 2)
 PHASE1_BATCH="${PHASE1_BATCH:-524288}"           # 512K tokens per step   (Phase 1)
 PHASE3_BATCH="${PHASE3_BATCH:-524288}"           # 512K tokens per step   (Phase 3)
-MICRO_BATCH="${MICRO_BATCH:-8}"                  # 8 seqs/GPU — no grad checkpointing needed
+MICRO_BATCH="${MICRO_BATCH:-24}"                 # fallback micro batch
+PHASE1_MICRO_BATCH="${PHASE1_MICRO_BATCH:-64}"   # 64 seqs × 512 = 32,768 tokens/step
+PHASE2_MICRO_BATCH="${PHASE2_MICRO_BATCH:-24}"   # 24 seqs × 2048 = 49,152 tokens/step
+PHASE3_MICRO_BATCH="${PHASE3_MICRO_BATCH:-12}"   # 12 seqs × 4096 = 49,152 tokens/step
 SAVE_EVERY="${SAVE_EVERY:-1000000000}"           # checkpoint every 1B tokens
 LOG_EVERY="${LOG_EVERY:-1}"                      # log EVERY step (full metric visibility)
 
@@ -71,7 +73,7 @@ echo "  Phase 1 tokens  : $(( PHASE1_TOKENS / 1000000000 ))B"
 echo "  Phase 2 tokens  : $(( PHASE2_TOKENS / 1000000000 ))B"
 echo "  Phase 3 tokens  : $(( PHASE3_TOKENS / 1000000000 ))B"
 echo "  Total tokens    : $(( (PHASE1_TOKENS + PHASE2_TOKENS + PHASE3_TOKENS) / 1000000000 ))B"
-echo "  Micro batch/GPU : $MICRO_BATCH seqs"
+echo "  Micro batch/GPU : Phase1=$PHASE1_MICRO_BATCH | Phase2=$PHASE2_MICRO_BATCH | Phase3=$PHASE3_MICRO_BATCH"
 echo "  Global batch    : ${BATCH_TOKENS} tokens/step (Phase 2)"
 echo "  Resume from     : ${RESUME_FROM:-<none>}"
 echo "  Budget cap      : \$400"
@@ -92,6 +94,9 @@ ${LAUNCHER} run_pretrain.py \
     --phase1_batch_tokens "$PHASE1_BATCH"      \
     --phase3_batch_tokens "$PHASE3_BATCH"      \
     --micro_batch_per_gpu "$MICRO_BATCH"       \
+    --phase1_micro_batch  "$PHASE1_MICRO_BATCH" \
+    --phase2_micro_batch  "$PHASE2_MICRO_BATCH" \
+    --phase3_micro_batch  "$PHASE3_MICRO_BATCH" \
     --save_every_tokens   "$SAVE_EVERY"        \
     --log_every           "$LOG_EVERY"         \
     --wandb_project       "$WANDB_PROJECT"     \

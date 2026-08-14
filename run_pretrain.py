@@ -72,7 +72,10 @@ def parse_args():
                         help="Phase 1 global batch tokens. Defaults to batch_tokens/2.")
     parser.add_argument("--phase3_batch_tokens", type=int, default=None,
                         help="Phase 3 global batch tokens. Defaults to batch_tokens/2.")
-    parser.add_argument("--micro_batch_per_gpu", type=int, default=8)
+    parser.add_argument("--micro_batch_per_gpu", type=int, default=24)
+    parser.add_argument("--phase1_micro_batch", type=int, default=64)
+    parser.add_argument("--phase2_micro_batch", type=int, default=24)
+    parser.add_argument("--phase3_micro_batch", type=int, default=12)
     
     # GPU
     parser.add_argument("--num_gpus", type=int, default=1)
@@ -152,6 +155,9 @@ def main():
         phase2_global_batch_tokens=_phase2_batch,
         phase3_global_batch_tokens=_phase3_batch,
         micro_batch_size_per_gpu=args.micro_batch_per_gpu,
+        phase1_micro_batch_per_gpu=args.phase1_micro_batch,
+        phase2_micro_batch_per_gpu=args.phase2_micro_batch,
+        phase3_micro_batch_per_gpu=args.phase3_micro_batch,
         num_gpus=world_size,
         bf16=args.bf16,
         torch_compile=not args.no_compile,
@@ -318,21 +324,22 @@ def main():
         seed=train_config.seed,
     )
 
+    mb_p1 = getattr(train_config, "phase1_micro_batch_per_gpu", train_config.micro_batch_size_per_gpu)
     ga_steps_p1 = max(1, train_config.phase1_global_batch_tokens // (
-        train_config.micro_batch_size_per_gpu
+        mb_p1
         * train_config.phase1_seq_len
         * world_size
     ))
     phase1_loader = build_dataloader(
         dataset=phase1_mixer,
-        batch_size=train_config.micro_batch_size_per_gpu,
+        batch_size=mb_p1,
         num_workers=train_config.num_dataloader_workers,
         prefetch_factor=train_config.prefetch_factor,
         shuffle=True,
         seed=train_config.seed,
     )
     logger.info(
-        f"Phase-1 loader ready: {len(phase1_mixer):,} sequences, "
+        f"Phase-1 loader ready: {len(phase1_mixer):,} sequences (batch_size={mb_p1}), "
         f"grad_accum={ga_steps_p1}"
     )
 
@@ -374,17 +381,21 @@ def main():
         seed=train_config.seed,
     )
 
+    mb_p2 = getattr(train_config, "phase2_micro_batch_per_gpu", train_config.micro_batch_size_per_gpu)
+    ga_steps_p2 = max(1, train_config.phase2_global_batch_tokens // (
+        mb_p2 * train_config.phase2_seq_len * world_size
+    ))
     phase2_loader = build_dataloader(
         dataset=phase2_mixer,
-        batch_size=train_config.micro_batch_size_per_gpu,
+        batch_size=mb_p2,
         num_workers=train_config.num_dataloader_workers,
         prefetch_factor=train_config.prefetch_factor,
         shuffle=True,
         seed=train_config.seed,
     )
     logger.info(
-        f"Phase-2 loader ready: {len(phase2_mixer):,} sequences, "
-        f"grad_accum={train_config.gradient_accumulation_steps_phase2}"
+        f"Phase-2 loader ready: {len(phase2_mixer):,} sequences (batch_size={mb_p2}), "
+        f"grad_accum={ga_steps_p2}"
     )
 
     # ── Phase 3: Context Extension — long-doc only (>4096 tokens) ─────────────
@@ -427,15 +438,16 @@ def main():
         seed=train_config.seed + 3,
     )
 
+    mb_p3 = getattr(train_config, "phase3_micro_batch_per_gpu", train_config.micro_batch_size_per_gpu)
     phase3_loader = build_dataloader(
         dataset=phase3_mixer,
-        batch_size=train_config.micro_batch_size_per_gpu,
+        batch_size=mb_p3,
         num_workers=train_config.num_dataloader_workers,
         prefetch_factor=train_config.prefetch_factor,
         shuffle=True,
         seed=train_config.seed + 3,
     )
-    logger.info(f"Phase-3 loader ready: {len(phase3_mixer):,} sequences")
+    logger.info(f"Phase-3 loader ready: {len(phase3_mixer):,} sequences (batch_size={mb_p3})")
 
     # ── Optimizer — differential parameter groups ─────────────────────────────
     logger.info("Building AdamW optimizer with parameter-group differentiation...")

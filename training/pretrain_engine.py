@@ -412,8 +412,9 @@ class PretrainEngine:
         logger.info(f"\n{'='*50}")
         logger.info("PHASE 1: Vocabulary Warmup (2B tokens, seq=512)")
         self._set_local_window(64)
+        mb_p1 = getattr(self.config, "phase1_micro_batch_per_gpu", self.config.micro_batch_size_per_gpu)
         ga_steps_p1 = max(1, self.config.phase1_global_batch_tokens // (
-            self.config.micro_batch_size_per_gpu * 512 * self.world_size
+            mb_p1 * 512 * self.world_size
         ))
         self.run_phase(
             phase=1, dataloader=phase1_dataloader, optimizer=optimizer,
@@ -425,7 +426,10 @@ class PretrainEngine:
         # ── Phase 2: Core Pre-Training ─────────────────────────────────────────
         logger.info(f"\n{'='*50}")
         logger.info("PHASE 2: Core Pre-Training (16B tokens, seq=2048)")
-        ga_steps_p2 = self.config.gradient_accumulation_steps_phase2
+        mb_p2 = getattr(self.config, "phase2_micro_batch_per_gpu", self.config.micro_batch_size_per_gpu)
+        ga_steps_p2 = max(1, self.config.phase2_global_batch_tokens // (
+            mb_p2 * 2048 * self.world_size
+        ))
         self.run_phase(
             phase=2, dataloader=phase2_dataloader, optimizer=optimizer,
             scheduler=lr_scheduler, target_tokens=self.config.phase2_tokens,
@@ -438,8 +442,9 @@ class PretrainEngine:
         logger.info("PHASE 3: Context Extension (2B tokens, seq=4096)")
         self._enable_yarn_scaling(factor=2.0)
         self._set_local_window(128)
+        mb_p3 = getattr(self.config, "phase3_micro_batch_per_gpu", self.config.micro_batch_size_per_gpu)
         ga_steps_p3 = max(1, self.config.phase3_global_batch_tokens // (
-            self.config.micro_batch_size_per_gpu * 4096 * self.world_size
+            mb_p3 * 4096 * self.world_size
         ))
         lr_const_scheduler = ConstantLRScheduler(optimizer, lr=3e-5)
         self.run_phase(
