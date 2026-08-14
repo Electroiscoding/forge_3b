@@ -198,17 +198,29 @@ class PretrainEngine:
         from datetime import datetime, timedelta
         if tok_per_sec > 100:
             now = datetime.now()
+            p1_tgt = getattr(self.config, "phase1_tokens", 0)
+            p2_tgt = getattr(self.config, "phase2_tokens", 18_000_000_000)
+            p3_tgt = getattr(self.config, "phase3_tokens", 2_000_000_000)
             
             # Remaining tokens per stage
-            rem_p1 = max(0, 2_000_000_000 - tokens) if phase == 1 else 0
-            rem_p2 = (16_000_000_000 - (tokens - 2_000_000_000)) if phase == 2 else (16_000_000_000 if phase == 1 else 0)
-            rem_p2 = max(0, rem_p2)
-            rem_p3 = (2_000_000_000 - (tokens - 18_000_000_000)) if phase == 3 else 2_000_000_000
-            rem_p3 = max(0, rem_p3)
+            rem_p1 = max(0, p1_tgt - tokens) if (p1_tgt > 0 and phase == 1) else 0
+            if phase == 1:
+                rem_p2 = p2_tgt
+            elif phase == 2:
+                rem_p2 = max(0, p2_tgt - (tokens - p1_tgt))
+            else:
+                rem_p2 = 0
+            
+            if phase <= 2:
+                rem_p3 = p3_tgt
+            elif phase == 3:
+                rem_p3 = max(0, p3_tgt - (tokens - p1_tgt - p2_tgt))
+            else:
+                rem_p3 = 0
             
             tok_s_p1 = tok_per_sec
-            tok_s_p2 = max(tok_per_sec, tok_per_sec * 1.15)
-            tok_s_p3 = max(tok_per_sec, tok_per_sec * 1.10)
+            tok_s_p2 = tok_per_sec
+            tok_s_p3 = tok_per_sec
             
             sec_to_p1_end = rem_p1 / tok_s_p1 if rem_p1 > 0 else 0
             sec_to_p2_end = sec_to_p1_end + (rem_p2 / tok_s_p2 if rem_p2 > 0 else 0)
@@ -216,7 +228,7 @@ class PretrainEngine:
             sec_to_sft_end = sec_to_p3_end + (1_400_000_000 / tok_per_sec)
             sec_to_dpo_end = sec_to_sft_end + (60_000_000 / tok_per_sec)
             
-            eta_p1_str = (now + timedelta(seconds=sec_to_p1_end)).strftime('%b %d %H:%M') + f" ({sec_to_p1_end/3600:.1f}h)" if rem_p1 > 0 else "DONE"
+            eta_p1_str = (now + timedelta(seconds=sec_to_p1_end)).strftime('%b %d %H:%M') + f" ({sec_to_p1_end/3600:.1f}h)" if rem_p1 > 0 else "SKIPPED/DONE"
             eta_p2_str = (now + timedelta(seconds=sec_to_p2_end)).strftime('%b %d %H:%M') + f" ({sec_to_p2_end/3600:.1f}h)" if rem_p2 > 0 else "DONE"
             eta_p3_str = (now + timedelta(seconds=sec_to_p3_end)).strftime('%b %d %H:%M') + f" ({sec_to_p3_end/3600:.1f}h)"
             eta_sft_str = (now + timedelta(seconds=sec_to_sft_end)).strftime('%b %d %H:%M') + f" ({sec_to_sft_end/3600:.1f}h)"
@@ -434,24 +446,29 @@ class PretrainEngine:
         logger.info(f"  World size: {self.world_size}")
         logger.info("=" * 70)
 
-        # ── Phase 1: Vocabulary Warmup ─────────────────────────────────────────
-        logger.info(f"\n{'='*50}")
-        logger.info("PHASE 1: Vocabulary Warmup (2B tokens, seq=512)")
-        self._set_local_window(64)
-        mb_p1 = getattr(self.config, "phase1_micro_batch_per_gpu", self.config.micro_batch_size_per_gpu)
-        ga_steps_p1 = max(1, self.config.phase1_global_batch_tokens // (
-            mb_p1 * 512 * self.world_size
-        ))
-        self.run_phase(
-            phase=1, dataloader=phase1_dataloader, optimizer=optimizer,
-            scheduler=lr_scheduler, target_tokens=self.config.phase1_tokens,
-            seq_len=512, gradient_accumulation_steps=ga_steps_p1,
-        )
-        self._save_checkpoint(1, self._global_step, self._tokens_processed)
+        # ── Phase 1: Vocabulary Warmup (optional) ──────────────────────────────
+        if self.config.phase1_tokens > 0 and phase1_dataloader is not None:
+            logger.info(f"\n{'='*50}")
+            logger.info(f"PHASE 1: Vocabulary Warmup ({self.config.phase1_tokens/1e9:.1f}B tokens, seq=512)")
+            self._set_local_window(64)
+            mb_p1 = getattr(self.config, "phase1_micro_batch_per_gpu", self.config.micro_batch_size_per_gpu)
+            ga_steps_p1 = max(1, self.config.phase1_global_batch_tokens // (
+                mb_p1 * 512 * self.world_size
+            ))
+            self.run_phase(
+                phase=1, dataloader=phase1_dataloader, optimizer=optimizer,
+                scheduler=lr_scheduler, target_tokens=self.config.phase1_tokens,
+                seq_len=512, gradient_accumulation_steps=ga_steps_p1,
+            )
+            self._save_checkpoint(1, self._global_step, self._tokens_processed)
+        else:
+            logger.info(f"\n{'='*50}")
+            logger.info("PHASE 1: SKIPPED (Starting directly on Phase 2: Core Pretraining @ seq=2048)")
+            self._set_local_window(64)
 
         # ── Phase 2: Core Pre-Training ─────────────────────────────────────────
         logger.info(f"\n{'='*50}")
-        logger.info("PHASE 2: Core Pre-Training (16B tokens, seq=2048)")
+        logger.info(f"PHASE 2: Core Pre-Training ({self.config.phase2_tokens/1e9:.1f}B tokens, seq=2048)")
         mb_p2 = getattr(self.config, "phase2_micro_batch_per_gpu", self.config.micro_batch_size_per_gpu)
         ga_steps_p2 = max(1, self.config.phase2_global_batch_tokens // (
             mb_p2 * 2048 * self.world_size

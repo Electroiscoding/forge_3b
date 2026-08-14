@@ -200,8 +200,8 @@ class PretrainConfig:
     resume_from_checkpoint: Optional[str] = None
     
     # ── Token Budget (Chinchilla-optimal for 1B: 20× params = 20B tokens) ────
-    phase1_tokens: int = 2_000_000_000       # 2B  vocab warmup (seq=512)
-    phase2_tokens: int = 16_000_000_000      # 16B core pretrain (seq=2048)
+    phase1_tokens: int = 0                   # Start directly on Phase 2 (seq=2048)
+    phase2_tokens: int = 18_000_000_000      # 18B core pretrain (seq=2048)
     phase3_tokens: int = 2_000_000_000       # 2B  context extension (seq=4096)
     total_tokens: int = 20_000_000_000       # 20B total
     
@@ -223,7 +223,7 @@ class PretrainConfig:
     # ── Learning Rate ─────────────────────────────────────────────────────────
     lr_max: float = 3e-4
     lr_min: float = 3e-5
-    lr_warmup_tokens: int = 2_000_000_000    # warm up over phase1
+    lr_warmup_tokens: int = 500_000_000      # 500M tokens warmup directly in Phase 2
     lr_schedule: str = "cosine"
     
     # ── AdamW ─────────────────────────────────────────────────────────────────

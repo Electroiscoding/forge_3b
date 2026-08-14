@@ -293,55 +293,52 @@ def main():
             logger.warning(f"Failed to load domain '{domain_subdir}': {exc}")
             return None
 
-    # ── Phase 1: Vocabulary Warmup — clean, diverse, short-context ────────────
-    # Wikipedia 50% | Books 30% | ArXiv 20%  (README §5.2 Phase 1)
-    logger.info("Building Phase-1 dataloader (seq=512, vocab warmup mix)...")
-    _p1_domains = {
-        "wikipedia": ("wikipedia",  0.50),
-        "books":     ("books",      0.30),
-        "arxiv":     ("arxiv",      0.20),
-    }
-    _p1_datasets: dict = {}
-    _p1_weights: dict  = {}
-    for key, (subdir, weight) in _p1_domains.items():
-        ds = _try_load_domain(subdir, seq_len=train_config.phase1_seq_len)
-        if ds is not None:
-            _p1_datasets[key] = ds
-            _p1_weights[key]  = weight
+    # ── Phase 1: Vocabulary Warmup (optional) ─────────────────────────────────
+    phase1_loader = None
+    if train_config.phase1_tokens > 0:
+        logger.info("Building Phase-1 dataloader (seq=512, vocab warmup mix)...")
+        _p1_domains = {
+            "wikipedia": ("wikipedia",  0.50),
+            "books":     ("books",      0.30),
+            "arxiv":     ("arxiv",      0.20),
+        }
+        _p1_datasets: dict = {}
+        _p1_weights: dict  = {}
+        for key, (subdir, weight) in _p1_domains.items():
+            ds = _try_load_domain(subdir, seq_len=train_config.phase1_seq_len)
+            if ds is not None:
+                _p1_datasets[key] = ds
+                _p1_weights[key]  = weight
 
-    if not _p1_datasets:
-        raise RuntimeError(
-            "No Phase-1 domains could be loaded. "
-            "Ensure tokenized data exists under --data_dir. "
-            "Expected subdirectories: wikipedia/, books/, arxiv/"
-        )
+        if _p1_datasets:
+            p1_target_seqs = train_config.phase1_tokens // train_config.phase1_seq_len
+            phase1_mixer = WeightedDataMixer(
+                datasets=_p1_datasets,
+                weights=_p1_weights,
+                total_samples=p1_target_seqs,
+                seed=train_config.seed,
+            )
 
-    p1_target_seqs = train_config.phase1_tokens // train_config.phase1_seq_len
-    phase1_mixer = WeightedDataMixer(
-        datasets=_p1_datasets,
-        weights=_p1_weights,
-        total_samples=p1_target_seqs,
-        seed=train_config.seed,
-    )
-
-    mb_p1 = getattr(train_config, "phase1_micro_batch_per_gpu", train_config.micro_batch_size_per_gpu)
-    ga_steps_p1 = max(1, train_config.phase1_global_batch_tokens // (
-        mb_p1
-        * train_config.phase1_seq_len
-        * world_size
-    ))
-    phase1_loader = build_dataloader(
-        dataset=phase1_mixer,
-        batch_size=mb_p1,
-        num_workers=train_config.num_dataloader_workers,
-        prefetch_factor=train_config.prefetch_factor,
-        shuffle=True,
-        seed=train_config.seed,
-    )
-    logger.info(
-        f"Phase-1 loader ready: {len(phase1_mixer):,} sequences (batch_size={mb_p1}), "
-        f"grad_accum={ga_steps_p1}"
-    )
+            mb_p1 = getattr(train_config, "phase1_micro_batch_per_gpu", train_config.micro_batch_size_per_gpu)
+            ga_steps_p1 = max(1, train_config.phase1_global_batch_tokens // (
+                mb_p1
+                * train_config.phase1_seq_len
+                * world_size
+            ))
+            phase1_loader = build_dataloader(
+                dataset=phase1_mixer,
+                batch_size=mb_p1,
+                num_workers=train_config.num_dataloader_workers,
+                prefetch_factor=train_config.prefetch_factor,
+                shuffle=True,
+                seed=train_config.seed,
+            )
+            logger.info(
+                f"Phase-1 loader ready: {len(phase1_mixer):,} sequences (batch_size={mb_p1}), "
+                f"grad_accum={ga_steps_p1}"
+            )
+    else:
+        logger.info("Phase 1 disabled (phase1_tokens=0) — starting directly on Phase 2.")
 
     # ── Phase 2: Core Pretraining — full domain mix ────────────────────────────
     # FineWeb-Edu 30% | Stack 16% | Wiki 8% | Math 8% | Books 7% | ArXiv 6%

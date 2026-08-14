@@ -28,8 +28,8 @@ TOKENIZER_PROFILE="${TOKENIZER_PROFILE:-standard}"
 MODEL_CONFIG="${MODEL_CONFIG:-./configs/forge_1b.json}"   # use 1B config
 
 # ── Training — Chinchilla-optimal for 1B params: 20B tokens ───────────────────
-PHASE1_TOKENS="${PHASE1_TOKENS:-2000000000}"     # 2B  vocab warmup  (seq=512)
-PHASE2_TOKENS="${PHASE2_TOKENS:-16000000000}"    # 16B core pretrain (seq=2048)
+PHASE1_TOKENS="${PHASE1_TOKENS:-0}"               # 0 tokens (start directly on Phase 2 @ seq=2048)
+PHASE2_TOKENS="${PHASE2_TOKENS:-18000000000}"    # 18B core pretrain (seq=2048)
 PHASE3_TOKENS="${PHASE3_TOKENS:-2000000000}"     # 2B  ctx extension (seq=4096)
 LR_MAX="${LR_MAX:-3e-4}"
 
