@@ -145,6 +145,8 @@ def compile_model(
             if hasattr(cfg, "autotune_in_subproc"):
                 cfg.autotune_in_subproc = True
             logger.debug("Inductor autotuner configured with shared memory pruning and OOM fallback")
+        if hasattr(torch, "_dynamo") and hasattr(torch._dynamo, "config"):
+            torch._dynamo.config.suppress_errors = True
     except Exception as e:
         logger.debug(f"Could not configure inductor autotune flags: {e}")
 

@@ -11,8 +11,19 @@ from huggingface_hub import HfApi
 
 logger = logging.getLogger(__name__)
 
-# Retrieve HuggingFace token from environment first, fallback to hardcoded token
-HF_TOKEN = os.environ.get("HF_TOKEN") or ("hf_" + "appUYmSsrmTHCTSGJZPopqBhdZjcnzoeJR")
+def _get_hf_token() -> str:
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+    if token:
+        return token
+    token_file = Path.home() / ".cache" / "huggingface" / "token"
+    if token_file.exists():
+        try:
+            return token_file.read_text().strip()
+        except Exception:
+            pass
+    return ""
+
+HF_TOKEN = _get_hf_token()
 
 # Background thread pool/executor tracker
 _upload_threads = []
