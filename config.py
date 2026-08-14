@@ -210,10 +210,10 @@ class PretrainConfig:
     phase1_global_batch_tokens: int = 524_288     # 512K tokens/step (phase 1)
     phase2_global_batch_tokens: int = 1_048_576   # 1M tokens/step  (phase 2)
     phase3_global_batch_tokens: int = 524_288     # 512K tokens/step (phase 3)
-    micro_batch_size_per_gpu: int = 32            # default fallback
-    phase1_micro_batch_per_gpu: int = 128         # 128 seqs × 512 = 65,536 tokens/micro-step (8 accum steps)
-    phase2_micro_batch_per_gpu: int = 32          # 32 seqs × 2048 = 65,536 tokens/micro-step (16 accum steps)
-    phase3_micro_batch_per_gpu: int = 16          # 16 seqs × 4096 = 65,536 tokens/micro-step (8 accum steps)
+    micro_batch_size_per_gpu: int = 24            # default fallback
+    phase1_micro_batch_per_gpu: int = 64          # 64 seqs × 512 = 32,768 tokens/micro-step (16 accum steps)
+    phase2_micro_batch_per_gpu: int = 24          # 24 seqs × 2048 = 49,152 tokens/micro-step (21 accum steps)
+    phase3_micro_batch_per_gpu: int = 12          # 12 seqs × 4096 = 49,152 tokens/micro-step (11 accum steps)
     
     # ── Context Lengths ───────────────────────────────────────────────────────
     phase1_seq_len: int = 512
