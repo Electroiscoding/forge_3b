@@ -194,6 +194,36 @@ class PretrainEngine:
         
         mem = self.memory_monitor.snapshot()
 
+        # Stage Arrival Times (ETAs)
+        from datetime import datetime, timedelta
+        if tok_per_sec > 100:
+            now = datetime.now()
+            
+            # Remaining tokens per stage
+            rem_p1 = max(0, 2_000_000_000 - tokens) if phase == 1 else 0
+            rem_p2 = (16_000_000_000 - (tokens - 2_000_000_000)) if phase == 2 else (16_000_000_000 if phase == 1 else 0)
+            rem_p2 = max(0, rem_p2)
+            rem_p3 = (2_000_000_000 - (tokens - 18_000_000_000)) if phase == 3 else 2_000_000_000
+            rem_p3 = max(0, rem_p3)
+            
+            tok_s_p1 = tok_per_sec
+            tok_s_p2 = max(tok_per_sec, tok_per_sec * 1.15)
+            tok_s_p3 = max(tok_per_sec, tok_per_sec * 1.10)
+            
+            sec_to_p1_end = rem_p1 / tok_s_p1 if rem_p1 > 0 else 0
+            sec_to_p2_end = sec_to_p1_end + (rem_p2 / tok_s_p2 if rem_p2 > 0 else 0)
+            sec_to_p3_end = sec_to_p2_end + (rem_p3 / tok_s_p3 if rem_p3 > 0 else 0)
+            sec_to_sft_end = sec_to_p3_end + (1_400_000_000 / tok_per_sec)
+            sec_to_dpo_end = sec_to_sft_end + (60_000_000 / tok_per_sec)
+            
+            eta_p1_str = (now + timedelta(seconds=sec_to_p1_end)).strftime('%b %d %H:%M') + f" ({sec_to_p1_end/3600:.1f}h)" if rem_p1 > 0 else "DONE"
+            eta_p2_str = (now + timedelta(seconds=sec_to_p2_end)).strftime('%b %d %H:%M') + f" ({sec_to_p2_end/3600:.1f}h)" if rem_p2 > 0 else "DONE"
+            eta_p3_str = (now + timedelta(seconds=sec_to_p3_end)).strftime('%b %d %H:%M') + f" ({sec_to_p3_end/3600:.1f}h)"
+            eta_sft_str = (now + timedelta(seconds=sec_to_sft_end)).strftime('%b %d %H:%M') + f" ({sec_to_sft_end/3600:.1f}h)"
+            eta_dpo_str = (now + timedelta(seconds=sec_to_dpo_end)).strftime('%b %d %H:%M') + f" ({sec_to_dpo_end/3600:.1f}h)"
+        else:
+            eta_p1_str = eta_p2_str = eta_p3_str = eta_sft_str = eta_dpo_str = "calculating..."
+
         if self.is_main:
             logger.info(
                 f"[Ph{phase}|Step {step:,}] "
@@ -203,7 +233,8 @@ class PretrainEngine:
                 f"step={step_ms:.0f}ms | "
                 f"tokens={tokens/1e9:.3f}B | "
                 f"mem={mem['allocated_gb']:.1f}/{mem['total_gb']:.1f}GB | "
-                f"cost=${cost_usd:.2f}/${self._budget:.0f}"
+                f"cost=${cost_usd:.2f}/${self._budget:.0f}\n"
+                f"   ⏳ [STAGE ETAs] Phase1: {eta_p1_str} | Phase2: {eta_p2_str} | Phase3: {eta_p3_str} | SFT: {eta_sft_str} | DPO (Final): {eta_dpo_str}"
             )
             if self.wandb_run is not None:
                 metrics = {
