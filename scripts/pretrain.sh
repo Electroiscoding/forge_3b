@@ -27,37 +27,34 @@ RESUME_FROM="${RESUME_FROM:-}"
 TOKENIZER_PROFILE="${TOKENIZER_PROFILE:-standard}"
 MODEL_CONFIG="${MODEL_CONFIG:-./configs/forge_1b.json}"   # use 1B config
 
-# ── Training — Chinchilla-optimal for 1B params: 20B tokens ───────────────────
+# ── Training — 15B Chinchilla-optimal for 1B params: 15B tokens ────────────────
 PHASE1_TOKENS="${PHASE1_TOKENS:-0}"               # 0 tokens (start directly on Phase 2 @ seq=2048)
-PHASE2_TOKENS="${PHASE2_TOKENS:-18000000000}"    # 18B core pretrain (seq=2048)
+PHASE2_TOKENS="${PHASE2_TOKENS:-13000000000}"    # 13B core pretrain (seq=2048)
 PHASE3_TOKENS="${PHASE3_TOKENS:-2000000000}"     # 2B  ctx extension (seq=4096)
 LR_MAX="${LR_MAX:-3e-4}"
 
-# ── Batch sizes — tuned for max H100 throughput ───────────────────────────────
-# micro_batch=64/24/12 fills H100 80GB VRAM and eliminates Python loop overhead
-BATCH_TOKENS="${BATCH_TOKENS:-1048576}"          # 1M tokens per global step (Phase 2)
-PHASE1_BATCH="${PHASE1_BATCH:-524288}"           # 512K tokens per step   (Phase 1)
-PHASE3_BATCH="${PHASE3_BATCH:-524288}"           # 512K tokens per step   (Phase 3)
-MICRO_BATCH="${MICRO_BATCH:-16}"                 # fallback micro batch
-PHASE1_MICRO_BATCH="${PHASE1_MICRO_BATCH:-64}"   # 64 seqs × 512 = 32,768 tokens/step
-PHASE2_MICRO_BATCH="${PHASE2_MICRO_BATCH:-16}"   # 16 seqs × 2048 = 32,768 tokens/step (32 accum steps)
-PHASE3_MICRO_BATCH="${PHASE3_MICRO_BATCH:-8}"    # 8 seqs × 4096 = 32,768 tokens/step (16 accum steps)
+# ── Batch sizes — tuned for 32x H100 SXM maximum NVLink throughput ─────────────
+BATCH_TOKENS="${BATCH_TOKENS:-1048576}"          # 1,048,576 tokens per global step
+PHASE1_BATCH="${PHASE1_BATCH:-1048576}"
+PHASE3_BATCH="${PHASE3_BATCH:-1048576}"
+MICRO_BATCH="${MICRO_BATCH:-16}"                 # 16 seqs per GPU
+PHASE1_MICRO_BATCH="${PHASE1_MICRO_BATCH:-64}"   # 64 seqs × 512 = 32,768 tokens/GPU
+PHASE2_MICRO_BATCH="${PHASE2_MICRO_BATCH:-16}"   # 16 seqs × 2048 = 32,768 tokens/GPU (1 step across 32 GPUs)
+PHASE3_MICRO_BATCH="${PHASE3_MICRO_BATCH:-8}"    # 8 seqs × 4096 = 32,768 tokens/GPU (1 step across 32 GPUs)
 SAVE_EVERY="${SAVE_EVERY:-1000000000}"           # checkpoint every 1B tokens
 LOG_EVERY="${LOG_EVERY:-1}"                      # log EVERY step (full metric visibility)
 
-# ── Infrastructure (Single-GPU, 8x GPU node, or 64x GPU multi-node cluster) ──
-NUM_GPUS="${NUM_GPUS:-64}"                       # 64x H100 GPUs default for massive scale
-NNODES="${NNODES:-8}"                            # 8 nodes (8 GPUs per node = 64 GPUs)
-NODE_RANK="${NODE_RANK:-0}"                      # Node rank (0 for master node, 1..7 for workers)
+# ── Infrastructure (32x H100 GPU cluster: 4 nodes × 8 GPUs) ───────────────────
+NUM_GPUS="${NUM_GPUS:-32}"                       # 32x H100 GPUs default
+NNODES="${NNODES:-4}"                            # 4 nodes (8 GPUs per node = 32 GPUs)
+NODE_RANK="${NODE_RANK:-0}"                      # Node rank (0 for master node, 1..3 for workers)
 MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"          # Master node IP
 MASTER_PORT="${MASTER_PORT:-29500}"
 SEED="${SEED:-42}"
 
-# ── Dynamic Batch Sizing for 64x GPUs ──────────────────────────────────────────
-# On 64x GPUs, 1 micro-step of 16 seqs × 2048 × 64 GPUs = 2,097,152 tokens per pass!
-# We set Phase 2 global batch to 2,097,152 tokens (1 accumulation step per gradient sync)!
+# ── Dynamic Batch Sizing for 32x / 64x GPUs ────────────────────────────────────
 if [ "$NUM_GPUS" -ge 64 ]; then
-    BATCH_TOKENS="${BATCH_TOKENS:-2097152}"      # 2.1M tokens per global step
+    BATCH_TOKENS="${BATCH_TOKENS:-2097152}"      # 2.1M tokens per global step for 64x GPUs
     PHASE1_BATCH="${PHASE1_BATCH:-2097152}"
     PHASE3_BATCH="${PHASE3_BATCH:-2097152}"
 fi

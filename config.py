@@ -205,21 +205,22 @@ class PretrainConfig:
     data_dir: str = "Phase-Technologies/forge-3b-pretrain-data"  # same tokenized data
     resume_from_checkpoint: Optional[str] = None
     
-    # ── Token Budget (Chinchilla-optimal for 1B: 20× params = 20B tokens) ────
+    # ── Token Budget (15B Chinchilla-optimal run: 13B Phase 2 + 2B Phase 3) ──
     phase1_tokens: int = 0                   # Start directly on Phase 2 (seq=2048)
-    phase2_tokens: int = 18_000_000_000      # 18B core pretrain (seq=2048)
+    phase2_tokens: int = 13_000_000_000      # 13B core pretrain (seq=2048)
     phase3_tokens: int = 2_000_000_000       # 2B  context extension (seq=4096)
-    total_tokens: int = 20_000_000_000       # 20B total
+    total_tokens: int = 15_000_000_000       # 15B total
     
-    # ── Batch Config ──────────────────────────────────────────────────────────
-    # High micro-batch sizes saturate H100 80GB VRAM and eliminate Python step overhead
-    phase1_global_batch_tokens: int = 524_288     # 512K tokens/step (phase 1)
-    phase2_global_batch_tokens: int = 1_048_576   # 1M tokens/step  (phase 2)
-    phase3_global_batch_tokens: int = 524_288     # 512K tokens/step (phase 3)
+    # ── Batch Config (Tuned for 32x H100 SXM — 1,048,576 tokens/step) ─────────
+    # With 32 GPUs @ micro_batch=16 (seq=2048): 32 × 16 × 2048 = 1,048,576 tokens per pass!
+    # Exactly 1 gradient accumulation step (zero idle wait, maximum NVLink saturation)
+    phase1_global_batch_tokens: int = 1_048_576   # 1M tokens/step
+    phase2_global_batch_tokens: int = 1_048_576   # 1M tokens/step (Phase 2)
+    phase3_global_batch_tokens: int = 1_048_576   # 1M tokens/step (Phase 3)
     micro_batch_size_per_gpu: int = 16            # default fallback
-    phase1_micro_batch_per_gpu: int = 64          # 64 seqs × 512 = 32,768 tokens/micro-step (16 accum steps)
-    phase2_micro_batch_per_gpu: int = 16          # 16 seqs × 2048 = 32,768 tokens/micro-step (32 accum steps)
-    phase3_micro_batch_per_gpu: int = 8           # 8 seqs × 4096 = 32,768 tokens/micro-step (16 accum steps)
+    phase1_micro_batch_per_gpu: int = 64          # 64 seqs × 512 = 32,768 tokens/GPU
+    phase2_micro_batch_per_gpu: int = 16          # 16 seqs × 2048 = 32,768 tokens/GPU (1 accum step across 32 GPUs)
+    phase3_micro_batch_per_gpu: int = 8           # 8 seqs × 4096 = 32,768 tokens/GPU (1 accum step across 32 GPUs)
     
     # ── Context Lengths ───────────────────────────────────────────────────────
     phase1_seq_len: int = 512

@@ -199,7 +199,7 @@ class PretrainEngine:
         if tok_per_sec > 100:
             now = datetime.now()
             p1_tgt = getattr(self.config, "phase1_tokens", 0)
-            p2_tgt = getattr(self.config, "phase2_tokens", 18_000_000_000)
+            p2_tgt = getattr(self.config, "phase2_tokens", 13_000_000_000)
             p3_tgt = getattr(self.config, "phase3_tokens", 2_000_000_000)
             
             # Remaining tokens per stage

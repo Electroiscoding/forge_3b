@@ -28,9 +28,9 @@ LR="${LR:-5e-7}"
 GRAD_CLIP="${GRAD_CLIP:-0.3}"
 SAVE_EVERY="${SAVE_EVERY:-100}"
 
-# ── Infrastructure (64x H100 GPU cluster) ────────────────────────────────────
-NUM_GPUS="${NUM_GPUS:-64}"
-NNODES="${NNODES:-8}"
+# ── Infrastructure (32x H100 GPU cluster) ────────────────────────────────────
+NUM_GPUS="${NUM_GPUS:-32}"
+NNODES="${NNODES:-4}"
 NODE_RANK="${NODE_RANK:-0}"
 MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
 MASTER_PORT="${MASTER_PORT:-29502}"
