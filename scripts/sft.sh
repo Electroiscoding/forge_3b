@@ -17,8 +17,8 @@ RESUME_FROM="${RESUME_FROM:-}"
 WANDB_PROJECT="${WANDB_PROJECT:-forge_1b_sft}"
 WANDB_ENTITY="${WANDB_ENTITY:-}"
 
-# ── Training hyperparams ──────────────────────────────────────────────────────
-TOTAL_TOKENS="${TOTAL_TOKENS:-1400000000}"    # 1.4B
+# ── Training hyperparams (Budget-Capped for 32x H100s) ────────────────────────
+TOTAL_TOKENS="${TOTAL_TOKENS:-500000000}"     # 500M tokens (~8 mins, $16)
 LR_MAX="${LR_MAX:-1e-5}"
 LR_MIN="${LR_MIN:-1e-6}"
 SEQ_LEN="${SEQ_LEN:-4096}"

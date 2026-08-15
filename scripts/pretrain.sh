@@ -27,10 +27,10 @@ RESUME_FROM="${RESUME_FROM:-}"
 TOKENIZER_PROFILE="${TOKENIZER_PROFILE:-standard}"
 MODEL_CONFIG="${MODEL_CONFIG:-./configs/forge_1b.json}"   # use 1B config
 
-# ── Training — 15B Chinchilla-optimal for 1B params: 15B tokens ────────────────
+# ── Training — Strictly Budget-Capped to $400 ($384 total cost @ $126.34/hr) ──
 PHASE1_TOKENS="${PHASE1_TOKENS:-0}"               # 0 tokens (start directly on Phase 2 @ seq=2048)
-PHASE2_TOKENS="${PHASE2_TOKENS:-13000000000}"    # 13B core pretrain (seq=2048)
-PHASE3_TOKENS="${PHASE3_TOKENS:-2000000000}"     # 2B  ctx extension (seq=4096)
+PHASE2_TOKENS="${PHASE2_TOKENS:-10500000000}"    # 10.5B core pretrain (seq=2048)
+PHASE3_TOKENS="${PHASE3_TOKENS:-500000000}"      # 500M ctx extension (seq=4096)
 LR_MAX="${LR_MAX:-3e-4}"
 
 # ── Batch sizes — tuned for 32x H100 SXM maximum NVLink throughput ─────────────

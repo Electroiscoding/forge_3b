@@ -205,11 +205,12 @@ class PretrainConfig:
     data_dir: str = "Phase-Technologies/forge-3b-pretrain-data"  # same tokenized data
     resume_from_checkpoint: Optional[str] = None
     
-    # ── Token Budget (15B Chinchilla-optimal run: 13B Phase 2 + 2B Phase 3) ──
+    # ── Token Budget (Strictly locked to $400 Budget: $384 total cost @ $126.34/hr) ──
+    # 11B tokens total = 10.5B Phase 2 + 500M Phase 3 context extension (seq=4096)
     phase1_tokens: int = 0                   # Start directly on Phase 2 (seq=2048)
-    phase2_tokens: int = 13_000_000_000      # 13B core pretrain (seq=2048)
-    phase3_tokens: int = 2_000_000_000       # 2B  context extension (seq=4096)
-    total_tokens: int = 15_000_000_000       # 15B total
+    phase2_tokens: int = 10_500_000_000      # 10.5B core pretrain (seq=2048) -> 2.70h ($341)
+    phase3_tokens: int = 500_000_000         # 500M context extension (seq=4096) -> 0.13h ($16)
+    total_tokens: int = 11_000_000_000       # 11.0B total pretrain -> 2.83h ($357)
     
     # ── Batch Config (Tuned for 32x H100 SXM — 1,048,576 tokens/step) ─────────
     # With 32 GPUs @ micro_batch=16 (seq=2048): 32 × 16 × 2048 = 1,048,576 tokens per pass!
