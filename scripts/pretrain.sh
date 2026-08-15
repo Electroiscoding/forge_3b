@@ -21,7 +21,16 @@ DATA_DIR="${DATA_DIR:-Phase-Technologies/forge-3b-pretrain-data}"  # HF repo or 
 OUTPUT_DIR="${OUTPUT_DIR:-/workspace/checkpoints/forge_1b_pretrain}"
 WANDB_PROJECT="${WANDB_PROJECT:-forge_1b_pretrain}"
 WANDB_ENTITY="${WANDB_ENTITY:-}"
-RESUME_FROM="${RESUME_FROM:-}"
+# Auto-detect latest checkpoint if available to prevent any lost progress
+if [ -z "${RESUME_FROM:-}" ]; then
+    if [ -f "$OUTPUT_DIR/latest_checkpoint.json" ]; then
+        LATEST_DIR=$(python3 -c "import json; print(json.load(open('$OUTPUT_DIR/latest_checkpoint.json')).get('latest_path', ''))" 2>/dev/null || true)
+        if [ -n "$LATEST_DIR" ] && [ -d "$LATEST_DIR" ]; then
+            RESUME_FROM="$LATEST_DIR"
+            echo "🔄 [AUTO-RESUME] Found existing checkpoint: $RESUME_FROM (resuming automatically!)"
+        fi
+    fi
+fi
 
 # ── Model ─────────────────────────────────────────────────────────────────────
 TOKENIZER_PROFILE="${TOKENIZER_PROFILE:-standard}"

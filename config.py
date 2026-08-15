@@ -246,9 +246,10 @@ class PretrainConfig:
     ssm_lr_mult: float = 0.3
     router_lr_mult: float = 0.5
     
-    # ── Checkpointing ─────────────────────────────────────────────────────────
-    save_every_n_tokens: int = 1_000_000_000  # checkpoint every 1B tokens
-    keep_last_n_checkpoints: int = 5
+    # ── Checkpointing (Hyper-Resilient: saves every 20-30 mins OR 500M tokens) 
+    save_every_n_tokens: int = 500_000_000    # checkpoint every 500M tokens (~8 mins on 32x GPUs)
+    save_every_minutes: float = 20.0          # time-based checkpoint guard (every 20 minutes)
+    keep_last_n_checkpoints: int = 10         # keep 10 historical snapshots
     
     # ── Logging ───────────────────────────────────────────────────────────────
     log_every_n_steps: int = 1           # log every step for full metrics visibility

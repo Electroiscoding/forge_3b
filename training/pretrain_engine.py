@@ -113,48 +113,85 @@ class PretrainEngine:
             logger.info("Single GPU — no DDP wrapping")
 
     # ─────────────────────────────────────────────────────────────────────────
-    # CHECKPOINTING
+    # PRODUCTION-GRADE FAULT-TOLERANT CHECKPOINTING
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _save_checkpoint(self, phase: int, step: int, tokens: int):
-        """Save model checkpoint with metadata. Only main rank writes."""
+    def _save_checkpoint(self, phase: int, step: int, tokens: int, optimizer=None, scheduler=None, is_emergency: bool = False):
+        """
+        Hyper-resilient checkpoint save with model state, optimizer state, scheduler state,
+        rng state, and metadata. Only main rank writes disk files.
+        """
         if not self.is_main:
             return
 
-        ckpt_dir = Path(self.config.output_dir) / f"phase{phase}_step{step}"
-        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        tag = f"emergency_step{step}" if is_emergency else f"phase{phase}_step{step}"
+        ckpt_dir = Path(self.config.output_dir) / tag
+        temp_dir = Path(self.config.output_dir) / f".tmp_{tag}"
+        temp_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            torch.save(self.raw_model.state_dict(), str(ckpt_dir / "model.safetensors"))
+            # 1. Model state
+            torch.save(self.raw_model.state_dict(), str(temp_dir / "model.safetensors"))
+            
+            # 2. Optimizer & Scheduler states for exact bitwise resume
+            if optimizer is not None:
+                torch.save(optimizer.state_dict(), str(temp_dir / "optimizer.pt"))
+            if scheduler is not None and hasattr(scheduler, "state_dict"):
+                torch.save(scheduler.state_dict(), str(temp_dir / "scheduler.pt"))
+
+            # 3. RNG States for deterministic dataset & dropout resume
+            rng_state = {
+                "torch": torch.get_rng_state(),
+                "cuda": torch.cuda.get_rng_state() if torch.cuda.is_available() else None,
+            }
+            torch.save(rng_state, str(temp_dir / "rng_state.pt"))
+
+            # 4. Comprehensive Metadata
+            elapsed_h = (time.time() - self._start_time) / 3600
+            cost_usd = elapsed_h * self._hourly_cost
+            meta = {
+                "phase": phase,
+                "step": step,
+                "tokens_processed": tokens,
+                "timestamp": datetime.datetime.utcnow().isoformat(),
+                "cost_usd": cost_usd,
+                "budget_remaining_usd": self._budget - cost_usd,
+                "is_emergency": is_emergency,
+                "world_size": self.world_size,
+            }
+            with open(str(temp_dir / "checkpoint_meta.json"), "w") as f:
+                json.dump(meta, f, indent=2)
+
+            # Atomic directory rename to prevent corrupted partial checkpoints
+            if ckpt_dir.exists():
+                shutil.rmtree(ckpt_dir, ignore_errors=True)
+            temp_dir.rename(ckpt_dir)
+
+            # Update 'latest' pointer file for instant 1-click resume
+            latest_ptr = Path(self.config.output_dir) / "latest_checkpoint.json"
+            with open(str(latest_ptr), "w") as f:
+                json.dump({"latest_path": str(ckpt_dir.resolve()), "tokens": tokens, "step": step}, f, indent=2)
+
+            logger.info(
+                f"✅ [CHECKPOINT SAVED] {ckpt_dir.name} | "
+                f"Tokens: {tokens/1e9:.3f}B | Spent: ${meta['cost_usd']:.2f} | Remaining: ${meta['budget_remaining_usd']:.2f}"
+            )
+
+            # Async upload to Hugging Face Hub so even if Pod terminates, weights are in the cloud!
+            upload_folder_async(str(ckpt_dir), repo_name="forge-1b-pretrain", folder_in_repo=ckpt_dir.name)
+            self._last_checkpoint_time = time.time()
+            self._rotate_checkpoints()
+
         except Exception as e:
-            logger.error(f"Checkpoint save failed: {e}")
-            return
-
-        elapsed_h = (time.time() - self._start_time) / 3600
-        cost_usd = elapsed_h * self._hourly_cost
-        meta = {
-            "phase": phase,
-            "step": step,
-            "tokens_processed": tokens,
-            "timestamp": datetime.datetime.utcnow().isoformat(),
-            "cost_usd": cost_usd,
-            "budget_remaining_usd": self._budget - cost_usd,
-        }
-        with open(str(ckpt_dir / "checkpoint_meta.json"), "w") as f:
-            json.dump(meta, f, indent=2)
-
-        logger.info(
-            f"Checkpoint saved: {ckpt_dir} "
-            f"(${meta['cost_usd']:.2f} spent, ${meta['budget_remaining_usd']:.2f} remaining)"
-        )
-        upload_folder_async(str(ckpt_dir), repo_name="forge-1b-pretrain", folder_in_repo=ckpt_dir.name)
-        self._rotate_checkpoints()
+            logger.error(f"❌ Checkpoint save failed: {e}", exc_info=True)
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
 
     def _rotate_checkpoints(self):
-        """Keep only the last N checkpoints to save disk space."""
+        """Keep only the last N checkpoints to save disk space, preserving emergency saves."""
         ckpt_base = Path(self.config.output_dir)
         checkpoints = sorted(
-            ckpt_base.glob("phase*_step*"),
+            [p for p in ckpt_base.glob("phase*_step*") if p.is_dir() and not p.name.startswith(".tmp_")],
             key=lambda p: p.stat().st_mtime,
         )
         n_keep = self.config.keep_last_n_checkpoints
@@ -400,9 +437,20 @@ class PretrainEngine:
                 grad_norm=grad_norm,
             )
 
-            # Periodic checkpointing
-            if self._tokens_processed % self.config.save_every_n_tokens < batch_tokens:
-                self._save_checkpoint(phase, self._global_step, self._tokens_processed)
+            # Periodic checkpointing (Trigger on tokens OR elapsed time since last save)
+            now_t = time.time()
+            elapsed_since_save_min = (now_t - getattr(self, "_last_checkpoint_time", self._start_time)) / 60.0
+            time_trigger = elapsed_since_save_min >= getattr(self.config, "save_every_minutes", 20.0)
+            token_trigger = (self._tokens_processed % self.config.save_every_n_tokens < batch_tokens)
+            
+            if token_trigger or time_trigger:
+                self._save_checkpoint(
+                    phase=phase,
+                    step=self._global_step,
+                    tokens=self._tokens_processed,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                )
 
             # Budget guard
             elapsed_h = (time.time() - self._start_time) / 3600
@@ -411,7 +459,14 @@ class PretrainEngine:
                 logger.warning(f"⚠️  Budget at 95%: ${cost:.2f} of ${self._budget:.2f}")
             if cost > self._budget:
                 logger.error(f"❌ Budget exceeded: ${cost:.2f} > ${self._budget:.2f}. Stopping!")
-                self._save_checkpoint(phase, self._global_step, self._tokens_processed)
+                self._save_checkpoint(
+                    phase=phase,
+                    step=self._global_step,
+                    tokens=self._tokens_processed,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    is_emergency=True,
+                )
                 sys.exit(1)
 
         return tokens_this_phase

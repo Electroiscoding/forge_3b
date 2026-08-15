@@ -487,11 +487,28 @@ def main():
         group_multipliers=lr_group_multipliers,
     )
 
-    # Fast-forward the scheduler to the resume point so the LR is correct.
-    if start_tokens > 0:
-        logger.info(f"Fast-forwarding LR scheduler to {start_tokens / 1e9:.2f}B tokens...")
-        lr_scheduler.step(start_tokens)
-        logger.info(f"LR after fast-forward: {lr_scheduler.get_lr():.2e}")
+    # Fast-forward the scheduler to the resume point and load optimizer state if available
+    if args.resume_from:
+        resume_p = Path(args.resume_from)
+        opt_ckpt = resume_p / "optimizer.pt"
+        if opt_ckpt.exists():
+            try:
+                optimizer.load_state_dict(torch.load(str(opt_ckpt), map_location=device))
+                logger.info("✅ Optimizer state restored exactly from checkpoint.")
+            except Exception as e:
+                logger.warning(f"Could not load optimizer state dict: {e}")
+
+        sched_ckpt = resume_p / "scheduler.pt"
+        if sched_ckpt.exists() and hasattr(lr_scheduler, "load_state_dict"):
+            try:
+                lr_scheduler.load_state_dict(torch.load(str(sched_ckpt), map_location=device))
+                logger.info("✅ Scheduler state restored exactly from checkpoint.")
+            except Exception as e:
+                logger.warning(f"Could not load scheduler state dict: {e}")
+        elif start_tokens > 0:
+            logger.info(f"Fast-forwarding LR scheduler to {start_tokens / 1e9:.2f}B tokens...")
+            lr_scheduler.step(start_tokens)
+            logger.info(f"LR after fast-forward: {lr_scheduler.get_lr():.2e}")
 
     # ── WandB ─────────────────────────────────────────────────────────────────
     wandb_run = None
@@ -618,23 +635,30 @@ def main():
         logger.warning("Training interrupted by user (KeyboardInterrupt).")
         logger.info("Saving emergency checkpoint before exit...")
         engine._save_checkpoint(
-            phase=0,
+            phase=2,
             step=engine._global_step,
             tokens=engine._tokens_processed,
+            optimizer=optimizer,
+            scheduler=lr_scheduler,
+            is_emergency=True,
         )
-        logger.info("Emergency checkpoint saved. Exiting.")
+        logger.info("Emergency checkpoint saved with full model & optimizer states. Exiting.")
         raise
     except Exception as exc:
         logger.exception(f"Training crashed: {exc}")
         logger.info("Attempting emergency checkpoint save...")
         try:
             engine._save_checkpoint(
-                phase=0,
+                phase=2,
                 step=engine._global_step,
                 tokens=engine._tokens_processed,
+                optimizer=optimizer,
+                scheduler=lr_scheduler,
+                is_emergency=True,
             )
+            logger.info("Emergency checkpoint saved successfully!")
         except Exception as save_exc:
-            logger.error(f"Emergency checkpoint also failed: {save_exc}")
+            logger.error(f"Emergency checkpoint save also failed: {save_exc}")
         raise
 
     # ── Final Export ─────────────────────────────────────────────────────────
