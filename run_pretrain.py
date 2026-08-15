@@ -395,56 +395,55 @@ def main():
         f"grad_accum={ga_steps_p2}"
     )
 
-    # ── Phase 3: Context Extension — long-doc only (>4096 tokens) ─────────────
-    # Re-uses Phase-2 domain mix but filtered at the PackedTokenDataset level.
-    # The data pipeline should have written separate long-doc packs during
-    # preprocessing. Fall back to Phase-2 mix if dedicated packs are absent.
-    logger.info("Building Phase-3 dataloader (seq=4096, long-doc mix)...")
-    _p3_long_suffix = "long"   # e.g. fineweb_edu_long/, books_long/, etc.
-    _p3_datasets: dict = {}
-    _p3_weights: dict  = {}
+    # ── Phase 3: Context Extension (optional) ──────────────────────────────────
+    phase3_loader = None
+    if train_config.phase3_tokens > 0:
+        logger.info("Building Phase-3 dataloader (seq=4096, long-doc mix)...")
+        _p3_long_suffix = "long"   # e.g. fineweb_edu_long/, books_long/, etc.
+        _p3_datasets: dict = {}
+        _p3_weights: dict  = {}
 
-    for key, (subdir, weight) in _p2_domains.items():
-        # Prefer the dedicated long-doc split, fall back to full domain.
-        long_subdir = f"{subdir}_{_p3_long_suffix}"
-        ds = _try_load_domain(long_subdir, seq_len=train_config.phase3_seq_len)
-        if ds is None:
-            ds = _try_load_domain(subdir, seq_len=train_config.phase3_seq_len)
-        if ds is not None:
-            _p3_datasets[key] = ds
-            _p3_weights[key]  = weight
-
-    if not _p3_datasets:
-        logger.warning(
-            "No Phase-3 long-doc packs found — "
-            "re-loading Phase-2 domains at seq=4096."
-        )
-        # Re-load Phase-2 domain directories with the Phase-3 seq_len so the
-        # PackedTokenDataset reshapes the raw data to (N, 4096) correctly.
         for key, (subdir, weight) in _p2_domains.items():
-            ds = _try_load_domain(subdir, seq_len=train_config.phase3_seq_len)
+            # Prefer the dedicated long-doc split, fall back to full domain.
+            long_subdir = f"{subdir}_{_p3_long_suffix}"
+            ds = _try_load_domain(long_subdir, seq_len=train_config.phase3_seq_len)
+            if ds is None:
+                ds = _try_load_domain(subdir, seq_len=train_config.phase3_seq_len)
             if ds is not None:
                 _p3_datasets[key] = ds
                 _p3_weights[key]  = weight
 
-    p3_target_seqs = train_config.phase3_tokens // train_config.phase3_seq_len
-    phase3_mixer = WeightedDataMixer(
-        datasets=_p3_datasets,
-        weights=_p3_weights,
-        total_samples=p3_target_seqs,
-        seed=train_config.seed + 3,
-    )
+        if not _p3_datasets:
+            logger.warning(
+                "No Phase-3 long-doc packs found — "
+                "re-loading Phase-2 domains at seq=4096."
+            )
+            for key, (subdir, weight) in _p2_domains.items():
+                ds = _try_load_domain(subdir, seq_len=train_config.phase3_seq_len)
+                if ds is not None:
+                    _p3_datasets[key] = ds
+                    _p3_weights[key]  = weight
 
-    mb_p3 = getattr(train_config, "phase3_micro_batch_per_gpu", train_config.micro_batch_size_per_gpu)
-    phase3_loader = build_dataloader(
-        dataset=phase3_mixer,
-        batch_size=mb_p3,
-        num_workers=train_config.num_dataloader_workers,
-        prefetch_factor=train_config.prefetch_factor,
-        shuffle=True,
-        seed=train_config.seed + 3,
-    )
-    logger.info(f"Phase-3 loader ready: {len(phase3_mixer):,} sequences (batch_size={mb_p3})")
+        p3_target_seqs = train_config.phase3_tokens // train_config.phase3_seq_len
+        phase3_mixer = WeightedDataMixer(
+            datasets=_p3_datasets,
+            weights=_p3_weights,
+            total_samples=p3_target_seqs,
+            seed=train_config.seed + 3,
+        )
+
+        mb_p3 = getattr(train_config, "phase3_micro_batch_per_gpu", train_config.micro_batch_size_per_gpu)
+        phase3_loader = build_dataloader(
+            dataset=phase3_mixer,
+            batch_size=mb_p3,
+            num_workers=train_config.num_dataloader_workers,
+            prefetch_factor=train_config.prefetch_factor,
+            shuffle=True,
+            seed=train_config.seed + 3,
+        )
+        logger.info(f"Phase-3 loader ready: {len(phase3_mixer):,} sequences (batch_size={mb_p3})")
+    else:
+        logger.info("Phase 3 disabled (phase3_tokens=0) — pure seq=2048 pretraining.")
 
     # ── Optimizer — differential parameter groups ─────────────────────────────
     logger.info("Building AdamW optimizer with parameter-group differentiation...")

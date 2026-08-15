@@ -206,11 +206,11 @@ class PretrainConfig:
     resume_from_checkpoint: Optional[str] = None
     
     # ── Token Budget (Strictly locked to $400 Budget: $384 total cost @ $126.34/hr) ──
-    # 11B tokens total = 10.5B Phase 2 + 500M Phase 3 context extension (seq=4096)
-    phase1_tokens: int = 0                   # Start directly on Phase 2 (seq=2048)
-    phase2_tokens: int = 10_500_000_000      # 10.5B core pretrain (seq=2048) -> 2.70h ($341)
-    phase3_tokens: int = 500_000_000         # 500M context extension (seq=4096) -> 0.13h ($16)
-    total_tokens: int = 11_000_000_000       # 11.0B total pretrain -> 2.83h ($357)
+    # 11B tokens directly in Phase 2 at seq=2048 (Phase 1 & Phase 3 omitted)
+    phase1_tokens: int = 0                   # Omitted (start directly on Phase 2 @ seq=2048)
+    phase2_tokens: int = 11_000_000_000      # 11.0B core pretrain (seq=2048) -> ~2.8h ($357)
+    phase3_tokens: int = 0                   # Omitted (pure seq=2048 pretraining)
+    total_tokens: int = 11_000_000_000       # 11.0B total pretrain
     
     # ── Batch Config (Tuned for 32x H100 SXM — 1,048,576 tokens/step) ─────────
     # With 32 GPUs @ micro_batch=16 (seq=2048): 32 × 16 × 2048 = 1,048,576 tokens per pass!
@@ -221,12 +221,12 @@ class PretrainConfig:
     micro_batch_size_per_gpu: int = 16            # default fallback
     phase1_micro_batch_per_gpu: int = 64          # 64 seqs × 512 = 32,768 tokens/GPU
     phase2_micro_batch_per_gpu: int = 16          # 16 seqs × 2048 = 32,768 tokens/GPU (1 accum step across 32 GPUs)
-    phase3_micro_batch_per_gpu: int = 8           # 8 seqs × 4096 = 32,768 tokens/GPU (1 accum step across 32 GPUs)
+    phase3_micro_batch_per_gpu: int = 8           # 8 seqs × 4096 = 32,768 tokens/GPU
     
     # ── Context Lengths ───────────────────────────────────────────────────────
     phase1_seq_len: int = 512
     phase2_seq_len: int = 2048
-    phase3_seq_len: int = 4096
+    phase3_seq_len: int = 2048
     
     # ── Learning Rate ─────────────────────────────────────────────────────────
     lr_max: float = 3e-4

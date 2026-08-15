@@ -199,8 +199,8 @@ class PretrainEngine:
         if tok_per_sec > 100:
             now = datetime.now()
             p1_tgt = getattr(self.config, "phase1_tokens", 0)
-            p2_tgt = getattr(self.config, "phase2_tokens", 13_000_000_000)
-            p3_tgt = getattr(self.config, "phase3_tokens", 2_000_000_000)
+            p2_tgt = getattr(self.config, "phase2_tokens", 11_000_000_000)
+            p3_tgt = getattr(self.config, "phase3_tokens", 0)
             
             # Remaining tokens per stage
             rem_p1 = max(0, p1_tgt - tokens) if (p1_tgt > 0 and phase == 1) else 0
@@ -211,10 +211,13 @@ class PretrainEngine:
             else:
                 rem_p2 = 0
             
-            if phase <= 2:
-                rem_p3 = p3_tgt
-            elif phase == 3:
-                rem_p3 = max(0, p3_tgt - (tokens - p1_tgt - p2_tgt))
+            if p3_tgt > 0:
+                if phase <= 2:
+                    rem_p3 = p3_tgt
+                elif phase == 3:
+                    rem_p3 = max(0, p3_tgt - (tokens - p1_tgt - p2_tgt))
+                else:
+                    rem_p3 = 0
             else:
                 rem_p3 = 0
             
@@ -225,12 +228,12 @@ class PretrainEngine:
             sec_to_p1_end = rem_p1 / tok_s_p1 if rem_p1 > 0 else 0
             sec_to_p2_end = sec_to_p1_end + (rem_p2 / tok_s_p2 if rem_p2 > 0 else 0)
             sec_to_p3_end = sec_to_p2_end + (rem_p3 / tok_s_p3 if rem_p3 > 0 else 0)
-            sec_to_sft_end = sec_to_p3_end + (1_400_000_000 / tok_per_sec)
+            sec_to_sft_end = sec_to_p3_end + (500_000_000 / tok_per_sec)
             sec_to_dpo_end = sec_to_sft_end + (60_000_000 / tok_per_sec)
             
-            eta_p1_str = (now + timedelta(seconds=sec_to_p1_end)).strftime('%b %d %H:%M') + f" ({sec_to_p1_end/3600:.1f}h)" if rem_p1 > 0 else "SKIPPED/DONE"
+            eta_p1_str = (now + timedelta(seconds=sec_to_p1_end)).strftime('%b %d %H:%M') + f" ({sec_to_p1_end/3600:.1f}h)" if rem_p1 > 0 else "SKIPPED"
             eta_p2_str = (now + timedelta(seconds=sec_to_p2_end)).strftime('%b %d %H:%M') + f" ({sec_to_p2_end/3600:.1f}h)" if rem_p2 > 0 else "DONE"
-            eta_p3_str = (now + timedelta(seconds=sec_to_p3_end)).strftime('%b %d %H:%M') + f" ({sec_to_p3_end/3600:.1f}h)"
+            eta_p3_str = (now + timedelta(seconds=sec_to_p3_end)).strftime('%b %d %H:%M') + f" ({sec_to_p3_end/3600:.1f}h)" if rem_p3 > 0 else "SKIPPED"
             eta_sft_str = (now + timedelta(seconds=sec_to_sft_end)).strftime('%b %d %H:%M') + f" ({sec_to_sft_end/3600:.1f}h)"
             eta_dpo_str = (now + timedelta(seconds=sec_to_dpo_end)).strftime('%b %d %H:%M') + f" ({sec_to_dpo_end/3600:.1f}h)"
         else:
@@ -480,31 +483,40 @@ class PretrainEngine:
         )
         self._save_checkpoint(2, self._global_step, self._tokens_processed)
 
-        # ── Phase 3: Context Extension ─────────────────────────────────────────
-        logger.info(f"\n{'='*50}")
-        logger.info("PHASE 3: Context Extension (2B tokens, seq=4096)")
-        self._enable_yarn_scaling(factor=2.0)
-        self._set_local_window(128)
-        mb_p3 = getattr(self.config, "phase3_micro_batch_per_gpu", self.config.micro_batch_size_per_gpu)
-        ga_steps_p3 = max(1, self.config.phase3_global_batch_tokens // (
-            mb_p3 * 4096 * self.world_size
-        ))
-        lr_const_scheduler = ConstantLRScheduler(optimizer, lr=3e-5)
-        self.run_phase(
-            phase=3, dataloader=phase3_dataloader, optimizer=optimizer,
-            scheduler=lr_const_scheduler, target_tokens=self.config.phase3_tokens,
-            seq_len=4096, gradient_accumulation_steps=ga_steps_p3,
-        )
-        self._save_checkpoint(3, self._global_step, self._tokens_processed)
+        # ── Phase 3: Context Extension (optional) ──────────────────────────────
+        if self.config.phase3_tokens > 0 and phase3_dataloader is not None:
+            logger.info(f"\n{'='*50}")
+            logger.info(f"PHASE 3: Context Extension ({self.config.phase3_tokens/1e9:.1f}B tokens, seq=4096)")
+            self._enable_yarn_scaling(factor=2.0)
+            self._set_local_window(128)
+            mb_p3 = getattr(self.config, "phase3_micro_batch_per_gpu", self.config.micro_batch_size_per_gpu)
+            ga_steps_p3 = max(1, self.config.phase3_global_batch_tokens // (
+                mb_p3 * 4096 * self.world_size
+            ))
+            lr_const_scheduler = ConstantLRScheduler(optimizer, lr=3e-5)
+            self.run_phase(
+                phase=3, dataloader=phase3_dataloader, optimizer=optimizer,
+                scheduler=lr_const_scheduler, target_tokens=self.config.phase3_tokens,
+                seq_len=4096, gradient_accumulation_steps=ga_steps_p3,
+            )
+            self._save_checkpoint(3, self._global_step, self._tokens_processed)
+            last_phase_num = 3
+        else:
+            logger.info(f"\n{'='*50}")
+            logger.info("PHASE 3: SKIPPED (Pure seq=2048 pretraining completed)")
+            last_phase_num = 2
 
         # ── Final copy ────────────────────────────────────────────────────────
         final_dir = Path(self.config.output_dir) / "final"
         if self.is_main:
-            shutil.copytree(
-                Path(self.config.output_dir) / f"phase3_step{self._global_step}",
-                final_dir,
-                dirs_exist_ok=True,
-            )
+            source_ckpt = Path(self.config.output_dir) / f"phase{last_phase_num}_step{self._global_step}"
+            if source_ckpt.exists():
+                shutil.copytree(
+                    source_ckpt,
+                    final_dir,
+                    dirs_exist_ok=True,
+                )
+                logger.info(f"Copied final pretrain checkpoint to {final_dir}")
 
         elapsed_h = (time.time() - self._start_time) / 3600
         total_cost = elapsed_h * self._hourly_cost
