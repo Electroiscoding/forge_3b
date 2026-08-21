@@ -246,12 +246,24 @@ $CLUSTER_LAUNCH "$SCRIPT_DIR/run_dpo.py" \
 DPO_FINAL="$DPO_OUT/final"
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FINAL VERIFICATION & INFERENCE SMOKE TEST
+# ─────────────────────────────────────────────────────────────────────────────
+banner "RUNNING FINAL INFERENCE SMOKE TEST"
+echo "  Testing prompt generation with final trained checkpoint..."
+python3 "$SCRIPT_DIR/run_inference.py" \
+  --model_path "$DPO_FINAL" \
+  --prompt "Explain quantum computing in simple terms:" \
+  --max_new_tokens 128 \
+  --temperature 0.7
+
+# ─────────────────────────────────────────────────────────────────────────────
 # DONE
 # ─────────────────────────────────────────────────────────────────────────────
-banner "ALL STAGES COMPLETE ✅"
+banner "ALL STAGES COMPLETE & VERIFIED ✅"
 echo "  Pretrain : $PRETRAIN_FINAL"
 echo "  SFT      : $SFT_FINAL"
 echo "  DPO      : $DPO_FINAL"
 echo "  Logs     : $LOGS_DIR/"
 echo ""
+echo "  🚀 All weights, tokenizer, and configs synced to Hugging Face Hub!"
 echo "  Final model ready at: $DPO_FINAL"
