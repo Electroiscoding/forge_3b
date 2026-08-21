@@ -36,9 +36,9 @@ fi
 TOKENIZER_PROFILE="${TOKENIZER_PROFILE:-standard}"
 MODEL_CONFIG="${MODEL_CONFIG:-./configs/forge_500m.json}"   # use 500M config
 
-# ── Training — Strictly Budget-Capped to $400 ($357 Pretrain @ $126.34/hr) ───
+# ── Training — 15B Tokens for 500M Params (~$245.59 total cost on 32x H100) ──
 PHASE1_TOKENS="${PHASE1_TOKENS:-0}"               # 0 tokens (Omitted)
-PHASE2_TOKENS="${PHASE2_TOKENS:-11000000000}"    # 11.0B core pretrain (seq=2048)
+PHASE2_TOKENS="${PHASE2_TOKENS:-15000000000}"    # 15.0B core pretrain (seq=2048)
 PHASE3_TOKENS="${PHASE3_TOKENS:-0}"              # 0 tokens (Omitted - pure 2048 seq)
 LR_MAX="${LR_MAX:-3e-4}"
 

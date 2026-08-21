@@ -205,12 +205,12 @@ class PretrainConfig:
     data_dir: str = "Phase-Technologies/forge-3b-pretrain-data"  # same tokenized data
     resume_from_checkpoint: Optional[str] = None
     
-    # ── Token Budget (Strictly locked to $400 Budget: $384 total cost @ $126.34/hr) ──
-    # 11B tokens directly in Phase 2 at seq=2048 (Phase 1 & Phase 3 omitted)
+    # ── Token Budget (15B Tokens for 500M params: ~$245.59 total cost @ $3.50/GPU/hr on 32x H100) ──
+    # 15B tokens directly in Phase 2 at seq=2048 (Phase 1 & Phase 3 omitted)
     phase1_tokens: int = 0                   # Omitted (start directly on Phase 2 @ seq=2048)
-    phase2_tokens: int = 11_000_000_000      # 11.0B core pretrain (seq=2048) -> ~2.8h ($357)
+    phase2_tokens: int = 15_000_000_000      # 15.0B core pretrain (seq=2048) -> ~2.08h ($233.33)
     phase3_tokens: int = 0                   # Omitted (pure seq=2048 pretraining)
-    total_tokens: int = 11_000_000_000       # 11.0B total pretrain
+    total_tokens: int = 15_000_000_000       # 15.0B total pretrain
     
     # ── Batch Config (Tuned for 32x H100 SXM — 1,048,576 tokens/step) ─────────
     # With 32 GPUs @ micro_batch=16 (seq=2048): 32 × 16 × 2048 = 1,048,576 tokens per pass!
