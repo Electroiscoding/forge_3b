@@ -544,8 +544,8 @@ class ForgeModel(nn.Module):
         return counts
 
 
-def build_forge_1b(config=None) -> ForgeModel:
-    """Build FORGE-1B (<= 1.0B total params) from config (or default config)."""
+def build_forge_500m(config=None) -> ForgeModel:
+    """Build FORGE-500M (500M total params) from config (or default config)."""
     from config import ForgeModelConfig
     if config is None:
         config = ForgeModelConfig()
@@ -554,5 +554,5 @@ def build_forge_1b(config=None) -> ForgeModel:
 
 
 def build_forge_3b(config=None) -> ForgeModel:
-    """Alias for build_forge_1b (FORGE architecture downgraded to 1B max params)."""
-    return build_forge_1b(config)
+    """Alias for build_forge_500m (FORGE architecture downgraded to 1B max params)."""
+    return build_forge_500m(config)

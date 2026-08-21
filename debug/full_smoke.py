@@ -7,7 +7,7 @@ import os
 os.environ["FORGE_NO_TRITON"] = "1"
 
 from config import ForgeModelConfig
-from model.forge_model import build_forge_1b
+from model.forge_model import build_forge_500m
 
 
 def main():
@@ -16,8 +16,8 @@ def main():
     dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 
     cfg = ForgeModelConfig()
-    print(f"Building FORGE-1B on {device} ({dtype})...")
-    model = build_forge_1b(cfg).to(device).to(dtype)
+    print(f"Building FORGE-500M on {device} ({dtype})...")
+    model = build_forge_500m(cfg).to(device).to(dtype)
     model.eval()
 
     total_params = sum(p.numel() for p in model.parameters())

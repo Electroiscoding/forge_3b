@@ -1,6 +1,6 @@
 {
   "model_type": "forge",
-  "description": "FORGE-500M production model — 500.02M total params, full ARG+MHA+HSE architecture. Optimized for max H100 throughput within $400 budget.",
+  "description": "FORGE-500M production model — 499.66M total params, full ARG+MHA+HSE architecture.",
 
   "vocab_size":   206464,
   "d_model":      1024,

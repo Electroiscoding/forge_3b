@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# FORGE-1B DPO (Direct Preference Optimization) Launch Script
+# FORGE-500M DPO (Direct Preference Optimization) Launch Script
 # Runs AFTER SFT is complete (uses the sft/final/ checkpoint).
 # =============================================================================
 set -euo pipefail
@@ -9,12 +9,12 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-BASE_MODEL="${BASE_MODEL:-/workspace/checkpoints/forge_1b_sft/final}"
+BASE_MODEL="${BASE_MODEL:-/workspace/checkpoints/forge_500m_sft/final}"
 DATA_PATH="${DATA_PATH:-/workspace/data/dpo/preferences.jsonl}"
-OUTPUT_DIR="${OUTPUT_DIR:-/workspace/checkpoints/forge_1b_dpo}"
+OUTPUT_DIR="${OUTPUT_DIR:-/workspace/checkpoints/forge_500m_dpo}"
 RESUME_FROM="${RESUME_FROM:-}"
 
-WANDB_PROJECT="${WANDB_PROJECT:-forge_1b_dpo}"
+WANDB_PROJECT="${WANDB_PROJECT:-forge_500m_dpo}"
 WANDB_ENTITY="${WANDB_ENTITY:-}"
 
 # ── DPO hyperparams ───────────────────────────────────────────────────────────

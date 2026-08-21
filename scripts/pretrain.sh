@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # =============================================================================
-# FORGE-1B Pretraining Launch Script
-# Architecture : FORGE-1B (1.06B params, ~850M active per token)
+# FORGE-500M Pretraining Launch Script
+# Architecture : FORGE-500M (500M params, ~300M active per token)
 # Target       : 1x H100 SXM 80GB (RunPod) — scalable to 16x H100s
-# Token budget : 20B tokens (Chinchilla-optimal for 1B params)
+# Token budget : 20B tokens (Chinchilla-optimal for 500M params)
 # Cost math    : ~72h × $3.29/hr ≈ $237 pretrain | $26 SFT/DPO = ~$263 total
 # Hard budget  : $400 (runs comfortably with $137 buffer)
 # Throughput   : target ≥80k tok/s with torch.compile max-autotune + Triton
@@ -18,8 +18,8 @@ cd "$REPO_ROOT"
 
 # ── Paths — override via env vars for cloud deployments ───────────────────────
 DATA_DIR="${DATA_DIR:-Phase-Technologies/forge-3b-pretrain-data}"  # HF repo or local path
-OUTPUT_DIR="${OUTPUT_DIR:-/workspace/checkpoints/forge_1b_pretrain}"
-WANDB_PROJECT="${WANDB_PROJECT:-forge_1b_pretrain}"
+OUTPUT_DIR="${OUTPUT_DIR:-/workspace/checkpoints/forge_500m_pretrain}"
+WANDB_PROJECT="${WANDB_PROJECT:-forge_500m_pretrain}"
 WANDB_ENTITY="${WANDB_ENTITY:-}"
 # Auto-detect latest checkpoint if available to prevent any lost progress
 if [ -z "${RESUME_FROM:-}" ]; then
@@ -34,7 +34,7 @@ fi
 
 # ── Model ─────────────────────────────────────────────────────────────────────
 TOKENIZER_PROFILE="${TOKENIZER_PROFILE:-standard}"
-MODEL_CONFIG="${MODEL_CONFIG:-./configs/forge_1b.json}"   # use 1B config
+MODEL_CONFIG="${MODEL_CONFIG:-./configs/forge_500m.json}"   # use 500M config
 
 # ── Training — Strictly Budget-Capped to $400 ($357 Pretrain @ $126.34/hr) ───
 PHASE1_TOKENS="${PHASE1_TOKENS:-0}"               # 0 tokens (Omitted)
@@ -87,7 +87,7 @@ LOG_FILE="$OUTPUT_DIR/logs/pretrain_$(date +%Y%m%d_%H%M%S).log"
 echo "[INFO] Logging to $LOG_FILE"
 
 echo "========================================================================"
-echo " FORGE-1B PRETRAINING"
+echo " FORGE-500M PRETRAINING"
 echo "========================================================================"
 echo "  Model config    : $MODEL_CONFIG"
 echo "  Data dir        : $DATA_DIR"
@@ -136,7 +136,7 @@ EXIT_CODE=${PIPESTATUS[0]}
 if [ $EXIT_CODE -eq 0 ]; then
     echo ""
     echo "========================================================================"
-    echo " FORGE-1B PRETRAINING COMPLETE ✓"
+    echo " FORGE-500M PRETRAINING COMPLETE ✓"
     echo " Checkpoints: $OUTPUT_DIR"
     echo " Log:         $LOG_FILE"
     echo " Next:        Run scripts/sft.sh then scripts/dpo.sh"

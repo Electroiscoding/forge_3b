@@ -47,17 +47,17 @@ logger = logging.getLogger(__name__)
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="FORGE-1B Pretraining")
+    parser = argparse.ArgumentParser(description="FORGE-500M Pretraining")
     
     # Paths
     parser.add_argument("--data_dir", type=str, required=True,
                         help="HF repo string or local directory containing pretraining data domains")
-    parser.add_argument("--output_dir", type=str, default="./checkpoints/forge_1b_pretrain")
+    parser.add_argument("--output_dir", type=str, default="./checkpoints/forge_500m_pretrain")
     parser.add_argument("--resume_from", type=str, default=None)
     
     # Model
-    parser.add_argument("--model_config", type=str, default="./configs/forge_1b.json",
-                        help="Path to model config JSON (defaults to FORGE-1B config)")
+    parser.add_argument("--model_config", type=str, default="./configs/forge_500m.json",
+                        help="Path to model config JSON (defaults to FORGE-500M config)")
     parser.add_argument("--tokenizer_profile", type=str, default="standard",
                         choices=["standard", "lite"])
     
@@ -88,7 +88,7 @@ def parse_args():
     parser.add_argument("--no_gradient_checkpointing", action="store_true")
     
     # Logging
-    parser.add_argument("--wandb_project", type=str, default="forge_1b_pretrain")
+    parser.add_argument("--wandb_project", type=str, default="forge_500m_pretrain")
     parser.add_argument("--wandb_entity", type=str, default=None)
     parser.add_argument("--log_every", type=int, default=1)
     parser.add_argument("--save_every_tokens", type=int, default=1_000_000_000)
@@ -113,7 +113,7 @@ def main():
     
     if is_main:
         logger.info("=" * 70)
-        logger.info("FORGE-1B PRETRAINING")
+        logger.info("FORGE-500M PRETRAINING")
         logger.info(f"  Rank: {rank}/{world_size}")
         logger.info(f"  Device: {device}")
         logger.info(f"  Data: {args.data_dir}")
@@ -189,10 +189,10 @@ def main():
         tokenizer.save_pretrained(str(Path(args.output_dir) / "tokenizer"))
     
     # ── Model ─────────────────────────────────────────────────────────────────
-    logger.info("Building FORGE-1B model...")
-    from model.forge_model import build_forge_1b
+    logger.info("Building FORGE-500M model...")
+    from model.forge_model import build_forge_500m
 
-    model = build_forge_1b(model_config)
+    model = build_forge_500m(model_config)
     model = model.to(device).to(torch.bfloat16 if args.bf16 else torch.float32)
 
     n_params_total = sum(p.numel() for p in model.parameters())

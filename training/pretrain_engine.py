@@ -82,11 +82,11 @@ class PretrainEngine:
         # Budget tracking (USD)
         # Dynamic hourly cost based on RunPod Community Cloud 1x H100 SXM rate ($3.29/hr)
         self._hourly_cost = 3.29 * world_size
-        self._budget = 400.0  # $400 hard cap for FORGE-1B full pipeline
+        self._budget = 400.0  # $400 hard cap for FORGE-500M full pipeline
 
         from training.gpu_optimizer import GPUMemoryMonitor, ThroughputMeter
         self.memory_monitor = GPUMemoryMonitor(self.device, oom_threshold_gb=8.0)
-        # FORGE-1B: 6 × 991.6M params = 5.95B FLOPs/token
+        # FORGE-500M: 6 × 500M params = 3.0B FLOPs/token
         self.throughput_meter = ThroughputMeter(
             model_flops_per_token=6 * 500_019_616,
             device=self.device,
@@ -184,7 +184,7 @@ class PretrainEngine:
             )
 
             # Async upload to Hugging Face Hub so even if Pod terminates, weights are in the cloud!
-            upload_folder_async(str(ckpt_dir), repo_name="forge-1b-pretrain", folder_in_repo=ckpt_dir.name)
+            upload_folder_async(str(ckpt_dir), repo_name="forge-500m-pretrain", folder_in_repo=ckpt_dir.name)
             self._last_checkpoint_time = time.time()
             self._rotate_checkpoints()
 
@@ -503,8 +503,8 @@ class PretrainEngine:
         self._wrap_ddp()
 
         logger.info("=" * 70)
-        logger.info("FORGE-1B PRETRAINING STARTED (plain PyTorch DDP, no DeepSpeed)")
-        logger.info(f"  Target: {self.config.total_tokens/1e9:.0f}B tokens (Chinchilla-optimal for 1B)")
+        logger.info("FORGE-500M PRETRAINING STARTED (plain PyTorch DDP, no DeepSpeed)")
+        logger.info(f"  Target: {self.config.total_tokens/1e9:.0f}B tokens (Chinchilla-optimal for 500M)")
         logger.info(f"  Budget: ${self._budget:.0f}  |  Cost rate: ${self._hourly_cost:.2f}/hr")
         logger.info(f"  Max training hours: {self._budget/self._hourly_cost:.1f}h")
         logger.info(f"  World size: {self.world_size}")

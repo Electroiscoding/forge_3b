@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# FORGE-1B Supervised Fine-Tuning Launch Script
+# FORGE-500M Supervised Fine-Tuning Launch Script
 # Runs AFTER pretraining is complete (uses the final/ checkpoint).
 # =============================================================================
 set -euo pipefail
@@ -9,12 +9,12 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-BASE_MODEL="${BASE_MODEL:-/workspace/checkpoints/forge_1b_pretrain/final}"
+BASE_MODEL="${BASE_MODEL:-/workspace/checkpoints/forge_500m_pretrain/final}"
 DATA_DIR="${DATA_DIR:-/workspace/data/sft}"
-OUTPUT_DIR="${OUTPUT_DIR:-/workspace/checkpoints/forge_1b_sft}"
+OUTPUT_DIR="${OUTPUT_DIR:-/workspace/checkpoints/forge_500m_sft}"
 RESUME_FROM="${RESUME_FROM:-}"
 
-WANDB_PROJECT="${WANDB_PROJECT:-forge_1b_sft}"
+WANDB_PROJECT="${WANDB_PROJECT:-forge_500m_sft}"
 WANDB_ENTITY="${WANDB_ENTITY:-}"
 
 # ── Training hyperparams (Budget-Capped for 32x H100s) ────────────────────────

@@ -41,7 +41,7 @@ logger = logging.getLogger("run_sft")
 # ── CLI Arguments ─────────────────────────────────────────────────────────────
 def _build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="FORGE-1B Supervised Fine-Tuning",
+        description="FORGE-500M Supervised Fine-Tuning",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     # Paths
@@ -49,7 +49,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                    help="Path to the pretrained model checkpoint (final/ dir)")
     p.add_argument("--data_dir",    required=True,
                    help="Dir containing train.jsonl (and optionally val.jsonl)")
-    p.add_argument("--output_dir",  default="./checkpoints/forge_1b_sft")
+    p.add_argument("--output_dir",  default="./checkpoints/forge_500m_sft")
     p.add_argument("--model_config", default=None,
                    help="Path to model_config.json; defaults to base_model/model_config.json")
     p.add_argument("--resume_from", default=None,
@@ -81,7 +81,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed",             type=int, default=42)
 
     # Logging
-    p.add_argument("--wandb_project", default="forge_1b_sft")
+    p.add_argument("--wandb_project", default="forge_500m_sft")
     p.add_argument("--wandb_entity",  default=None)
     p.add_argument("--log_every",     type=int, default=10)
 
@@ -126,7 +126,7 @@ def main():
 
     if is_main:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
-        logger.info(f"FORGE-1B SFT | world_size={world_size} | device={device}")
+        logger.info(f"FORGE-500M SFT | world_size={world_size} | device={device}")
 
     # ── Configs ───────────────────────────────────────────────────────────────
     from config import ForgeModelConfig, SFTConfig
@@ -188,8 +188,8 @@ def main():
     model_config.vocab_size = tokenizer.vocab_size
 
     # ── Model ─────────────────────────────────────────────────────────────────
-    logger.info("Building FORGE-1B model...")
-    from model.forge_model import build_forge_1b as build_forge_3b
+    logger.info("Building FORGE-500M model...")
+    from model.forge_model import build_forge_500m as build_forge_3b
 
     # Detect if ZeRO Stage 3 is enabled to use deepspeed.zero.Init() context manager (required for tied weights)
     is_zero3 = False

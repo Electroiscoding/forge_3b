@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 clear
 echo "========================================================================"
-echo "  🚀 FORGE-1B LIVE TRAINING MONITOR (NVIDIA H100 SXM)"
+echo "  🚀 FORGE-500M LIVE TRAINING MONITOR (NVIDIA H100 SXM)"
 echo "========================================================================"
 nvidia-smi --query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw --format=csv,noheader
 echo "------------------------------------------------------------------------"
@@ -22,7 +22,7 @@ if [ -f /workspace/forge_pipeline_master.log ]; then
     echo "------------------------------------------------------------------------"
     tail -f /workspace/forge_pipeline_master.log
 else
-    LATEST_LOG=$(ls -t /workspace/checkpoints/forge_1b_pretrain/logs/*.log 2>/dev/null | head -n 1 || true)
+    LATEST_LOG=$(ls -t /workspace/checkpoints/forge_500m_pretrain/logs/*.log 2>/dev/null | head -n 1 || true)
     if [ -n "$LATEST_LOG" ] && [ -f "$LATEST_LOG" ]; then
         tail -n 25 "$LATEST_LOG"
         echo "------------------------------------------------------------------------"

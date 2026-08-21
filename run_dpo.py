@@ -39,7 +39,7 @@ logger = logging.getLogger("run_dpo")
 # ── CLI ───────────────────────────────────────────────────────────────────────
 def _build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="FORGE-1B DPO Training",
+        description="FORGE-500M DPO Training",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     # Paths
@@ -47,7 +47,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                    help="SFT model dir (contains model_bf16.pt + tokenizer/)")
     p.add_argument("--data_dir",     required=True,
                    help="HF repo string or local directory with .npz shards / .jsonl files")
-    p.add_argument("--output_dir",   default="./checkpoints/forge_1b_dpo")
+    p.add_argument("--output_dir",   default="./checkpoints/forge_500m_dpo")
     p.add_argument("--model_config", default=None)
     p.add_argument("--resume_from",  default=None)
 
@@ -82,7 +82,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed",             type=int, default=42)
 
     # Logging
-    p.add_argument("--wandb_project", default="forge_1b_dpo")
+    p.add_argument("--wandb_project", default="forge_500m_dpo")
     p.add_argument("--wandb_entity",  default=None)
 
     return p
@@ -149,7 +149,7 @@ def main():
     if is_main:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
         logger.info(
-            f"FORGE-1B DPO | beta={args.beta} | loss={args.loss_type} | "
+            f"FORGE-500M DPO | beta={args.beta} | loss={args.loss_type} | "
             f"world_size={world_size} | device={device}"
         )
 
@@ -228,8 +228,8 @@ def main():
             logger.warning(f"Failed to check DeepSpeed config stage: {e}")
 
     # ── Policy Model ──────────────────────────────────────────────────────────
-    logger.info("Building FORGE-1B policy model...")
-    from model.forge_model import build_forge_1b as build_forge_3b
+    logger.info("Building FORGE-500M policy model...")
+    from model.forge_model import build_forge_500m as build_forge_3b
 
     if is_zero3 and ds_config is not None:
         import deepspeed

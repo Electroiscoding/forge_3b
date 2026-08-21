@@ -189,7 +189,7 @@ class ForgeModelConfig:
 
 @dataclass
 class PretrainConfig:
-    """Phase-aware pretraining configuration for FORGE-1B.
+    """Phase-aware pretraining configuration for FORGE-500M.
     
     Budget math (1x H100 SXM @ $3.29/hr):
       - Phase 1 (vocab warmup):  2B tokens @ 80k tok/s  →  ~7h  → $23
@@ -201,7 +201,7 @@ class PretrainConfig:
       GRAND TOTAL: ~$263 of $400 budget. $137 buffer.
     """
     
-    output_dir: str = "./checkpoints/forge_1b_pretrain"
+    output_dir: str = "./checkpoints/forge_500m_pretrain"
     data_dir: str = "Phase-Technologies/forge-3b-pretrain-data"  # same tokenized data
     resume_from_checkpoint: Optional[str] = None
     
@@ -254,7 +254,7 @@ class PretrainConfig:
     # ── Logging ───────────────────────────────────────────────────────────────
     log_every_n_steps: int = 1           # log every step for full metrics visibility
     eval_every_n_steps: int = 200        # eval perplexity every 200 steps
-    wandb_project: str = "forge_1b_pretrain"
+    wandb_project: str = "forge_500m_pretrain"
     wandb_entity: Optional[str] = None
     
     # ── GPU/Distributed ───────────────────────────────────────────────────────
@@ -280,10 +280,10 @@ class PretrainConfig:
 
 @dataclass
 class SFTConfig:
-    """Supervised Fine-Tuning configuration for FORGE-1B."""
+    """Supervised Fine-Tuning configuration for FORGE-500M."""
     
-    base_model_path: str = "./checkpoints/forge_1b_pretrain/final"
-    output_dir: str = "./checkpoints/forge_1b_sft"
+    base_model_path: str = "./checkpoints/forge_500m_pretrain/final"
+    output_dir: str = "./checkpoints/forge_500m_sft"
     data_dir: str = "Phase-Technologies/forge-3b-sft-data"
     
     # ── Training ──────────────────────────────────────────────────────────────
@@ -306,7 +306,7 @@ class SFTConfig:
     loss_on_prompt: bool = False       # only compute loss on assistant turns
     
     save_every_n_steps: int = 100
-    wandb_project: str = "forge_1b_sft"
+    wandb_project: str = "forge_500m_sft"
     deepspeed_config: str = "./configs/ds_zero3_sft.json"
     num_gpus: int = 1
     bf16: bool = True
@@ -316,10 +316,10 @@ class SFTConfig:
 
 @dataclass  
 class DPOConfig:
-    """Direct Preference Optimization configuration for FORGE-1B."""
+    """Direct Preference Optimization configuration for FORGE-500M."""
     
-    base_model_path: str = "./checkpoints/forge_1b_sft/final"
-    output_dir: str = "./checkpoints/forge_1b_dpo"
+    base_model_path: str = "./checkpoints/forge_500m_sft/final"
+    output_dir: str = "./checkpoints/forge_500m_dpo"
     data_dir: str = "Phase-Technologies/forge-3b-dpo-data"
     
     # ── DPO ───────────────────────────────────────────────────────────────────
@@ -343,7 +343,7 @@ class DPOConfig:
     n_epochs: int = 1
     
     save_every_n_steps: int = 100
-    wandb_project: str = "forge_1b_dpo"
+    wandb_project: str = "forge_500m_dpo"
     deepspeed_config: str = "./configs/ds_zero3_sft.json"
     num_gpus: int = 1
     bf16: bool = True
