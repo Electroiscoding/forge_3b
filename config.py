@@ -59,48 +59,48 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 @dataclass
 class ForgeModelConfig:
-    """Complete FORGE-1B architecture configuration. 991.6M total params (<= 1.0B)."""
+    """Complete FORGE-500M architecture configuration. 500.02M total params."""
     
     # ── Core Dimensions ──────────────────────────────────────────────────────
     vocab_size: int = 206_464          # CRAYON standard profile (206,373) padded to ×128
-    d_model: int = 1280               # 1B: 1280 (<= 1.0B total params)
-    n_layers: int = 24                # 1B: 24 layers (18 ARG + 6 MHA)
+    d_model: int = 1024               # 500M: 1024 (down from 1280)
+    n_layers: int = 18                # 500M: 18 layers (15 ARG + 3 MHA)
     max_seq_len: int = 4096
     
     # ── Layer Distribution ────────────────────────────────────────────────────
-    # Layer 0,1,2 = ARG; Layer 3 = MHA; repeat ×6
-    mha_layer_indices: List[int] = field(default_factory=lambda: [3,7,11,15,19,23])
+    # Layer 0-4 = ARG; Layer 5 = MHA; repeat ×3 across 18 layers
+    mha_layer_indices: List[int] = field(default_factory=lambda: [5, 11, 17])
     # Dense FFN on odd layers, HSE on even layers
-    dense_ffn_layer_indices: List[int] = field(default_factory=lambda: list(range(1,24,2)))
-    hse_ffn_layer_indices: List[int] = field(default_factory=lambda: list(range(0,24,2)))
+    dense_ffn_layer_indices: List[int] = field(default_factory=lambda: list(range(1, 18, 2)))
+    hse_ffn_layer_indices: List[int] = field(default_factory=lambda: list(range(0, 18, 2)))
     
     # ── ARG (Adaptive Recurrent Gating) ──────────────────────────────────────
-    arg_d_inner: int = 1280           # matches d_model for 1B
+    arg_d_inner: int = 1024           # matches d_model for 500M
     arg_d_state: int = 48
     arg_d_rank: int = 48               # dt projection rank
     arg_conv_kernel: int = 4
     arg_local_window: int = 64         # local attention window (phase 1+2)
     arg_local_n_heads: int = 8
     arg_local_n_kv_heads: int = 2
-    arg_head_dim: int = 80            # 1280 / 16 heads
+    arg_head_dim: int = 64            # 1024 / 16 heads
     arg_scalar_gate: bool = True       # scalar gate per token (vs d_model-dim)
     
     # ── MHA (Multi-Head Attention) ────────────────────────────────────────────
     mha_n_heads: int = 16
     mha_n_kv_heads: int = 4            # GQA: 4:1 ratio
-    mha_head_dim: int = 80            # 1280 / 16 heads
+    mha_head_dim: int = 64            # 1024 / 16 heads
     rope_theta: float = 500_000.0      # long-context RoPE base
     rope_scaling_type: Optional[str] = None  # None | "yarn"
     rope_scaling_factor: float = 1.0
     
     # ── Dense FFN (SwiGLU) ────────────────────────────────────────────────────
-    dense_d_ff: int = 3200             # 2.5 × d_model, multiple of 128
+    dense_d_ff: int = 2560             # 2.5 × d_model, multiple of 128
     
     # ── HSE FFN (Hierarchical Sparse Expert) ──────────────────────────────────
     hse_n_domains: int = 4
-    hse_n_experts_per_domain: int = 8  # total 32 experts
+    hse_n_experts_per_domain: int = 6  # total 24 experts (down from 32)
     hse_top_k: int = 2                 # active per token
-    hse_d_ff_expert: int = 288        # scaled for <= 1.0B total params
+    hse_d_ff_expert: int = 210        # scaled for 500M total params
     hse_capacity_factor: float = 1.25
     hse_expert_dropout: float = 0.1
     hse_aux_loss_alpha: float = 0.01
@@ -110,7 +110,7 @@ class ForgeModelConfig:
     
     # ── Normalization ─────────────────────────────────────────────────────────
     norm_type: str = "dgn"             # "dgn" or "rmsnorm"
-    dgn_n_groups: int = 16            # 1280 / 16 = 80 per group
+    dgn_n_groups: int = 16            # 1024 / 16 = 64 per group
     norm_eps: float = 1e-6
     
     # ── Initialization ────────────────────────────────────────────────────────
@@ -130,7 +130,7 @@ class ForgeModelConfig:
     use_triton_kernels: bool = True    # Triton fused ops
     use_torch_compile: bool = True
     compile_mode: str = "max-autotune"  # max throughput on H100
-    use_gradient_checkpointing: bool = False  # 1B fits in 80GB without checkpointing → faster
+    use_gradient_checkpointing: bool = False  # 500M fits easily in 80GB without checkpointing
     gradient_checkpointing_ratio: float = 0.0
     
     def n_params_total(self) -> int:
