@@ -53,9 +53,15 @@ PHASE3_MICRO_BATCH="${PHASE3_MICRO_BATCH:-8}"    # 8 seqs × 4096 = 32,768 token
 SAVE_EVERY="${SAVE_EVERY:-1000000000}"           # checkpoint every 1B tokens
 LOG_EVERY="${LOG_EVERY:-1}"                      # log EVERY step (full metric visibility)
 
-# ── Infrastructure (32x H100 GPU cluster: 4 nodes × 8 GPUs) ───────────────────
-NUM_GPUS="${NUM_GPUS:-32}"                       # 32x H100 GPUs default
-NNODES="${NNODES:-4}"                            # 4 nodes (8 GPUs per node = 32 GPUs)
+# ── Infrastructure (Auto-detects 1x, 8x, 32x GPUs) ───────────────────────────
+DETECTED_GPUS=$(python3 -c "import torch; print(torch.cuda.device_count())" 2>/dev/null || echo "1")
+if [ "$DETECTED_GPUS" -lt 1 ]; then DETECTED_GPUS=1; fi
+NUM_GPUS="${NUM_GPUS:-$DETECTED_GPUS}"
+if [ "$NUM_GPUS" -le 8 ]; then
+    NNODES="${NNODES:-1}"
+else
+    NNODES="${NNODES:-4}"
+fi
 NODE_RANK="${NODE_RANK:-0}"                      # Node rank (0 for master node, 1..3 for workers)
 MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"          # Master node IP
 MASTER_PORT="${MASTER_PORT:-29500}"

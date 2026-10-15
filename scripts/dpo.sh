@@ -28,9 +28,15 @@ LR="${LR:-5e-7}"
 GRAD_CLIP="${GRAD_CLIP:-0.3}"
 SAVE_EVERY="${SAVE_EVERY:-100}"
 
-# ── Infrastructure (32x H100 GPU cluster) ────────────────────────────────────
-NUM_GPUS="${NUM_GPUS:-32}"
-NNODES="${NNODES:-4}"
+# ── Infrastructure (Auto-detects 1x, 8x, 32x GPUs) ───────────────────────────
+DETECTED_GPUS=$(python3 -c "import torch; print(torch.cuda.device_count())" 2>/dev/null || echo "1")
+if [ "$DETECTED_GPUS" -lt 1 ]; then DETECTED_GPUS=1; fi
+NUM_GPUS="${NUM_GPUS:-$DETECTED_GPUS}"
+if [ "$NUM_GPUS" -le 8 ]; then
+    NNODES="${NNODES:-1}"
+else
+    NNODES="${NNODES:-4}"
+fi
 NODE_RANK="${NODE_RANK:-0}"
 MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
 MASTER_PORT="${MASTER_PORT:-29502}"
