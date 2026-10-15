@@ -52,11 +52,11 @@ LR_MAX="${LR_MAX:-3e-4}"
 # ── Batch sizes — tuned for 32x H100 SXM maximum NVLink throughput ─────────────
 BATCH_TOKENS="${BATCH_TOKENS:-1048576}"          # 1,048,576 tokens per global step
 PHASE1_BATCH="${PHASE1_BATCH:-1048576}"
-PHASE3_BATCH="${PHASE3_BATCH:-1048576}"
-MICRO_BATCH="${MICRO_BATCH:-16}"                 # 16 seqs per GPU
-PHASE1_MICRO_BATCH="${PHASE1_MICRO_BATCH:-64}"   # 64 seqs × 512 = 32,768 tokens/GPU
-PHASE2_MICRO_BATCH="${PHASE2_MICRO_BATCH:-16}"   # 16 seqs × 2048 = 32,768 tokens/GPU (1 step across 32 GPUs)
-PHASE3_MICRO_BATCH="${PHASE3_MICRO_BATCH:-8}"    # 8 seqs × 4096 = 32,768 tokens/GPU (1 step across 32 GPUs)
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+MICRO_BATCH="${MICRO_BATCH:-4}"                 # 4 seqs per GPU (prevents autograd unroll OOM)
+PHASE1_MICRO_BATCH="${PHASE1_MICRO_BATCH:-16}"
+PHASE2_MICRO_BATCH="${PHASE2_MICRO_BATCH:-4}"   # 4 seqs × 2048 = 8,192 tokens/GPU
+PHASE3_MICRO_BATCH="${PHASE3_MICRO_BATCH:-2}"
 SAVE_EVERY="${SAVE_EVERY:-1000000000}"           # checkpoint every 1B tokens
 LOG_EVERY="${LOG_EVERY:-1}"                      # log EVERY step (full metric visibility)
 
