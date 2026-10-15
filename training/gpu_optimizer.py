@@ -89,11 +89,7 @@ def setup_distributed(
     world_size = int(os.environ["WORLD_SIZE"])
     local_rank = int(os.environ["LOCAL_RANK"])
     
-    dist.init_process_group(
-        backend=backend,
-        timeout=datetime.timedelta(minutes=timeout_minutes),
-    )
-    
+    # Set CUDA device BEFORE initializing NCCL process group
     torch.cuda.set_device(local_rank)
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
@@ -102,14 +98,17 @@ def setup_distributed(
         torch.backends.cuda.enable_flash_sdp(True)
     if hasattr(torch.backends.cuda, "enable_mem_efficient_sdp"):
         torch.backends.cuda.enable_mem_efficient_sdp(True)
-    
-    # NCCL environment tuning for 64x H100 GPU cluster (NVLink + InfiniBand)
-    os.environ["NCCL_MIN_NCHANNELS"] = str(min(world_size * 2, 64))
-    os.environ["NCCL_MAX_NCHANNELS"] = "64"
+
+    # NCCL environment tuning — disable NVLS multicast to prevent CUDA error 401
+    os.environ["NCCL_NVLS_ENABLE"] = "0"
+    os.environ["NCCL_BUFFSIZE"] = "2097152"
     os.environ["NCCL_CROSS_NIC"] = "1"
-    os.environ["NCCL_BUFFSIZE"] = "16777216"
-    os.environ["NCCL_NET_GDR_LEVEL"] = "5"
-    os.environ["NCCL_NVLS_ENABLE"] = "1"
+    
+    dist.init_process_group(
+        backend=backend,
+        device_id=torch.device(f"cuda:{local_rank}"),
+        timeout=datetime.timedelta(minutes=timeout_minutes),
+    )
     
     logger.info(f"Distributed initialized: rank={rank}/{world_size}, local={local_rank}")
     return rank, world_size, local_rank
