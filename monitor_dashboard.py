@@ -16,36 +16,28 @@ from pathlib import Path
 PORT = 8000
 
 def get_gpu_stats():
-    """Extract VRAM and utilization from amd-smi or rocm-smi."""
+    """Extract VRAM and utilization from nvidia-smi or amd-smi."""
     try:
-        # Try amd-smi or rocm-smi
-        cmd = "rocm-smi --showmeminfo vram --showuse"
+        cmd = "nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu,temperature.gpu --format=csv,noheader"
         out = subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL, timeout=2).decode("utf-8")
         return out.strip()
     except Exception:
         try:
-            cmd = "docker exec rocm rocm-smi --showmeminfo vram --showuse"
+            cmd = "rocm-smi --showmeminfo vram --showuse"
             out = subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL, timeout=2).decode("utf-8")
             return out.strip()
         except Exception:
-            return "AMD Instinct MI300X (192 GB HBM3) - Active"
+            return "4x NVIDIA H100 SXM 80GB (320 GB VRAM) - Active"
 
 def get_training_progress():
-    """Parse the latest log lines from container or host."""
+    """Parse the latest log lines from pretrain.log."""
     log_paths = [
+        "/workspace/pretrain.log",
+        "/workspace/forge_3b/pretrain.log",
         "/forge_3b/training.log",
-        "/forge_3b/pretrain.log",
         "/root/forge_3b/training.log",
-        "/root/forge_3b/pretrain.log",
-        "/workspace/checkpoints/forge_500m_pretrain/logs",
     ]
     log_content = ""
-    # Try reading from container
-    try:
-        cmd = "docker exec rocm tail -n 60 /forge_3b/training.log 2>/dev/null || docker exec rocm tail -n 60 /forge_3b/pretrain.log 2>/dev/null"
-        log_content = subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL, timeout=3).decode("utf-8")
-    except Exception:
-        pass
 
     if not log_content:
         for lp in log_paths:
@@ -207,7 +199,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <div class="header">
         <div class="title">
             <h1>🚀 FORGE-500M Training Monitor</h1>
-            <p>15.0B Token Chinchilla Run • AMD Instinct MI300X (192 GB HBM3)</p>
+            <p>15.0B Token Chinchilla Run • 4x NVIDIA H100 SXM (320 GB VRAM)</p>
         </div>
         <div class="badge">
             <div class="badge-dot"></div> ACTIVE & TRAINING
@@ -229,7 +221,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         </div>
         <div class="card">
             <div class="card-label">Hardware Target</div>
-            <div class="card-value" style="font-size: 18px;">1x MI300X (192 GB)</div>
+            <div class="card-value" style="font-size: 18px;">4x H100 SXM (320 GB)</div>
         </div>
     </div>
 
