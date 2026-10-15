@@ -261,7 +261,7 @@ class ARGLayer(nn.Module):
             y = torch.stack(ys, dim=-1)
 
         y = rearrange(y, 'b d t -> b t d')           # (B, T, d_inner)
-        return self.out_proj(y)                      # (B, T, d_model)
+        return self.out_proj(y.to(dtype=x.dtype))    # (B, T, d_model)
     
     # ─────────────────────────────────────────────────────────────────────────
     # LOCAL ATTENTION BRANCH
