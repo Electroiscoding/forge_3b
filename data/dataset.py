@@ -70,6 +70,11 @@ def resolve_data_dir(data_dir: str) -> str:
             except ImportError:
                 token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
 
+            if token and isinstance(token, str):
+                token = token.strip() or None
+            else:
+                token = None
+
             logger.info(
                 f"Resolving HuggingFace dataset repo: '{data_dir}' "
                 f"(token={'set' if token else 'not set — public repos only'})"

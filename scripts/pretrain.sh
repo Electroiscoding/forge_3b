@@ -19,9 +19,12 @@ cd "$REPO_ROOT"
 # ── Paths — override via env vars for cloud deployments ───────────────────────
 export HF_HOME="${HF_HOME:-/workspace/hf_cache}"
 export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-/workspace/hf_cache}"
-export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-/workspace/hf_cache}"
-DATA_DIR="${DATA_DIR:-Phase-Technologies/forge-3b-pretrain-data}"  # HF repo or local path
-OUTPUT_DIR="${OUTPUT_DIR:-/workspace/checkpoints/forge_500m_pretrain}"
+if [ -d "/workspace/data/tokenized" ]; then
+    DEFAULT_DATA_DIR="/workspace/data/tokenized"
+else
+    DEFAULT_DATA_DIR="Phase-Technologies/forge-3b-pretrain-data"
+fi
+DATA_DIR="${DATA_DIR:-$DEFAULT_DATA_DIR}"  # HF repo or local path
 WANDB_PROJECT="${WANDB_PROJECT:-forge_500m_pretrain}"
 WANDB_ENTITY="${WANDB_ENTITY:-}"
 # Auto-detect latest checkpoint if available to prevent any lost progress
