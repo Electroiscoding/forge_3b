@@ -25,6 +25,7 @@ else
     DEFAULT_DATA_DIR="Phase-Technologies/forge-3b-pretrain-data"
 fi
 DATA_DIR="${DATA_DIR:-$DEFAULT_DATA_DIR}"  # HF repo or local path
+OUTPUT_DIR="${OUTPUT_DIR:-/workspace/checkpoints/forge_500m_pretrain}"
 WANDB_PROJECT="${WANDB_PROJECT:-forge_500m_pretrain}"
 WANDB_ENTITY="${WANDB_ENTITY:-}"
 # Auto-detect latest checkpoint if available to prevent any lost progress
