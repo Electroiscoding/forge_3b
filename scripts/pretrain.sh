@@ -17,6 +17,9 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 # ── Paths — override via env vars for cloud deployments ───────────────────────
+export HF_HOME="${HF_HOME:-/workspace/hf_cache}"
+export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-/workspace/hf_cache}"
+export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-/workspace/hf_cache}"
 DATA_DIR="${DATA_DIR:-Phase-Technologies/forge-3b-pretrain-data}"  # HF repo or local path
 OUTPUT_DIR="${OUTPUT_DIR:-/workspace/checkpoints/forge_500m_pretrain}"
 WANDB_PROJECT="${WANDB_PROJECT:-forge_500m_pretrain}"
