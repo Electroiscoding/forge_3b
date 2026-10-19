@@ -57,10 +57,10 @@ LR_MAX="${LR_MAX:-3e-4}"
 BATCH_TOKENS="${BATCH_TOKENS:-1048576}"          # 1,048,576 tokens per global step
 PHASE1_BATCH="${PHASE1_BATCH:-1048576}"
 PHASE3_BATCH="${PHASE3_BATCH:-1048576}"
-export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
-MICRO_BATCH="${MICRO_BATCH:-4}"                 # 4 seqs per GPU (prevents autograd unroll OOM)
-PHASE1_MICRO_BATCH="${PHASE1_MICRO_BATCH:-16}"
-PHASE2_MICRO_BATCH="${PHASE2_MICRO_BATCH:-4}"   # 4 seqs × 2048 = 8,192 tokens/GPU
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-garbage_collection_threshold:0.8,max_split_size_mb:128}"
+MICRO_BATCH="${MICRO_BATCH:-2}"                 # 2 seqs per GPU (rock-solid 6.2 GB peak VRAM on B300)
+PHASE1_MICRO_BATCH="${PHASE1_MICRO_BATCH:-8}"
+PHASE2_MICRO_BATCH="${PHASE2_MICRO_BATCH:-2}"   # 2 seqs × 2048 = 4,096 tokens/GPU
 PHASE3_MICRO_BATCH="${PHASE3_MICRO_BATCH:-2}"
 SAVE_EVERY="${SAVE_EVERY:-500000000}"            # checkpoint every 500M tokens (~55 min on 4x B300)
 LOG_EVERY="${LOG_EVERY:-1}"                      # log EVERY step (full metric visibility)
