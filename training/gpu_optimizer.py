@@ -522,6 +522,7 @@ class ThroughputMeter:
             "h100": 989.0,
             "h200": 989.0,
             "b200": 2250.0,
+            "b300": 2500.0,  # Blackwell Ultra — BF16 dense tensor core peak (estimated)
             "mi300": 653.7,
             "a100": 312.0,
             "a40": 37.4,
