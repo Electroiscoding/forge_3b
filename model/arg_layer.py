@@ -36,6 +36,37 @@ except ImportError:
     FLASH_ATTN_AVAILABLE = False
 
 
+@torch.jit.script
+def _fast_real_ssm_scan(
+    delta: torch.Tensor,
+    x_conv: torch.Tensor,
+    B_ssm: torch.Tensor,
+    C_ssm: torch.Tensor,
+    A: torch.Tensor,
+    D: torch.Tensor,
+    z_t: torch.Tensor,
+) -> torch.Tensor:
+    B_sz = x_conv.size(0)
+    d_in = x_conv.size(1)
+    T_sz = x_conv.size(2)
+    d_st = A.size(1)
+
+    dA = torch.exp(delta.unsqueeze(-1) * A.unsqueeze(0).unsqueeze(2))
+    dB = delta.unsqueeze(-1) * B_ssm.transpose(1, 2).unsqueeze(1)
+    bu = dB * x_conv.unsqueeze(-1)
+    C_t = C_ssm.transpose(1, 2).unsqueeze(1)
+    silu_z = torch.nn.functional.silu(z_t)
+
+    h = torch.zeros(B_sz, d_in, d_st, device=x_conv.device, dtype=x_conv.dtype)
+    y = torch.empty(B_sz, d_in, T_sz, device=x_conv.device, dtype=x_conv.dtype)
+
+    for t in range(T_sz):
+        h = h * dA[:, :, t] + bu[:, :, t]
+        y[:, :, t] = (h * C_t[:, :, t]).sum(dim=-1)
+
+    return (y + x_conv * D.unsqueeze(0).unsqueeze(-1)) * silu_z
+
+
 class ARGLayer(nn.Module):
     """
     Adaptive Recurrent Gating Layer.
@@ -242,23 +273,8 @@ class ARGLayer(nn.Module):
             )                                            # returns (B, d_inner, T), gated with z
         else:
             delta = F.softplus(dt + self.dt_proj.bias.float().view(1, -1, 1))
-            B_sz, d_in, T_sz = x_conv.shape
-            d_st = A.shape[1]
-            h = torch.zeros(B_sz, d_in, d_st, device=x_conv.device, dtype=x_conv.dtype)
-            ys = []
             z_t = rearrange(z, 'b t d -> b d t')
-            for t in range(T_sz):
-                d_t = delta[:, :, t]
-                u_t = x_conv[:, :, t]
-                b_t = B_ssm[:, :, t]
-                c_t = C_ssm[:, :, t]
-                dA = torch.exp(d_t.unsqueeze(-1) * A.unsqueeze(0))
-                dB = d_t.unsqueeze(-1) * b_t.unsqueeze(1)
-                h = h * dA + dB * u_t.unsqueeze(-1)
-                y_t = (h * c_t.unsqueeze(1)).sum(dim=-1) + u_t * self.D
-                y_t = y_t * F.silu(z_t[:, :, t])
-                ys.append(y_t)
-            y = torch.stack(ys, dim=-1)
+            y = _fast_real_ssm_scan(delta, x_conv, B_ssm, C_ssm, A, self.D, z_t)
 
         y = rearrange(y, 'b d t -> b t d')           # (B, T, d_inner)
         return self.out_proj(y.to(dtype=x.dtype))    # (B, T, d_model)
