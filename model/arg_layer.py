@@ -20,51 +20,8 @@ from einops import rearrange
 from .dgn_norm import build_norm
 from .rotary_embedding import RotaryEmbedding
 from .triton_kernels import fused_swiglu
+from .pscan import pscan
 
-try:
-    from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
-    MAMBA_SSM_AVAILABLE = True
-except ImportError:
-    selective_scan_fn = None
-    MAMBA_SSM_AVAILABLE = False
-
-try:
-    from flash_attn import flash_attn_func, flash_attn_varlen_func
-    from flash_attn.bert_padding import unpad_input, pad_input
-    FLASH_ATTN_AVAILABLE = True
-except ImportError:
-    FLASH_ATTN_AVAILABLE = False
-
-
-@torch.jit.script
-def _fast_real_ssm_scan(
-    delta: torch.Tensor,
-    x_conv: torch.Tensor,
-    B_ssm: torch.Tensor,
-    C_ssm: torch.Tensor,
-    A: torch.Tensor,
-    D: torch.Tensor,
-    z_t: torch.Tensor,
-) -> torch.Tensor:
-    B_sz = x_conv.size(0)
-    d_in = x_conv.size(1)
-    T_sz = x_conv.size(2)
-    d_st = A.size(1)
-
-    dA = torch.exp(delta.unsqueeze(-1) * A.unsqueeze(0).unsqueeze(2))
-    dB = delta.unsqueeze(-1) * B_ssm.transpose(1, 2).unsqueeze(1)
-    bu = dB * x_conv.unsqueeze(-1)
-    C_t = C_ssm.transpose(1, 2).unsqueeze(1)
-    silu_z = torch.nn.functional.silu(z_t)
-
-    h = torch.zeros(B_sz, d_in, d_st, device=x_conv.device, dtype=x_conv.dtype)
-    y = torch.empty(B_sz, d_in, T_sz, device=x_conv.device, dtype=x_conv.dtype)
-
-    for t in range(T_sz):
-        h = h * dA[:, :, t] + bu[:, :, t]
-        y[:, :, t] = (h * C_t[:, :, t]).sum(dim=-1)
-
-    return (y + x_conv * D.unsqueeze(0).unsqueeze(-1)) * silu_z
 
 
 class ARGLayer(nn.Module):
@@ -236,47 +193,29 @@ class ARGLayer(nn.Module):
         # ── Causal conv for local mixing ──────────────────────────────────────
         x_conv = rearrange(x_inner, 'b t d -> b d t')
         x_conv = self.conv1d(x_conv)[:, :, :T]       # trim causal padding, still (B, d_inner, T)
-        # keep channel-first — mamba_ssm expects (B, d_inner, T)
         x_conv = F.silu(x_conv)                      # (B, d_inner, T)
+        x_conv_t = rearrange(x_conv, 'b d t -> b t d')
 
         # ── Input-dependent SSM parameters ────────────────────────────────────
-        x_dbl = self.x_proj(rearrange(x_conv, 'b d t -> b t d'))  # (B, T, d_rank + 2*d_state)
+        x_dbl = self.x_proj(x_conv_t)                # (B, T, d_rank + 2*d_state)
         dt_raw, B_ssm, C_ssm = x_dbl.split([self.d_rank, self.d_state, self.d_state], dim=-1)
 
-        # dt: per-channel step size — (B, T, d_inner) → (B, d_inner, T) for kernel
-        # NOTE: do NOT apply softplus here — delta_softplus=True does it inside the kernel
-        dt = self.dt_proj(dt_raw)                    # (B, T, d_inner), raw logits
-        dt = rearrange(dt, 'b t d -> b d t').contiguous()  # (B, d_inner, T)
-
-        # B, C: (B, d_state, T) — channel-first for kernel
-        B_ssm = rearrange(B_ssm, 'b t n -> b n t').contiguous()   # (B, d_state, T)
-        C_ssm = rearrange(C_ssm, 'b t n -> b n t').contiguous()   # (B, d_state, T)
+        # dt: per-channel step size — (B, T, d_inner)
+        dt = F.softplus(self.dt_proj(dt_raw))
 
         # ── Build A from complex eigenvalue params ────────────────────────────
         A = self._build_real_A()                     # (d_inner, d_state), negative real
 
-        # ── Fused selective scan ──────────────────────────────────────────────
-        # selective_scan_fn fuses: discretization, scan, z-gate, skip-connection D
-        # CPB initial state (h0): selective_scan_fn assumes zero initial state.
-        # The learned dt/A/B/C will naturally handle context boundaries.
-        if x_conv.is_cuda and MAMBA_SSM_AVAILABLE:
-            y = selective_scan_fn(
-                x_conv,                                  # u:     (B, d_inner, T)
-                dt,                                      # delta: (B, d_inner, T), raw
-                A,                                       # A:     (d_inner, d_state), negative
-                B_ssm,                                   # B:     (B, d_state, T)
-                C_ssm,                                   # C:     (B, d_state, T)
-                self.D.float(),                          # D:     (d_inner,) skip connection
-                z=rearrange(z, 'b t d -> b d t').contiguous(),  # z: (B, d_inner, T) gate
-                delta_bias=self.dt_proj.bias.float(),    # dt bias, added before softplus
-                delta_softplus=True,                     # apply softplus inside kernel
-            )                                            # returns (B, d_inner, T), gated with z
-        else:
-            delta = F.softplus(dt + self.dt_proj.bias.float().view(1, -1, 1))
-            z_t = rearrange(z, 'b t d -> b d t')
-            y = _fast_real_ssm_scan(delta, x_conv, B_ssm, C_ssm, A, self.D, z_t)
+        # ── Parallel associative scan in pure PyTorch ─────────────────────────
+        dA = torch.exp(dt.unsqueeze(-1) * A.unsqueeze(0).unsqueeze(0))
+        dX = (dt * x_conv_t).unsqueeze(-1) * B_ssm.unsqueeze(2)
 
-        y = rearrange(y, 'b d t -> b t d')           # (B, T, d_inner)
+        H = pscan(dA, dX)                            # (B, T, d_inner, d_state)
+        y = (H * C_ssm.unsqueeze(2)).sum(dim=-1)     # (B, T, d_inner)
+
+        # Skip connection D and SiLU gate z
+        y = (y + x_conv_t * self.D.unsqueeze(0).unsqueeze(0)) * F.silu(z)
+
         return self.out_proj(y.to(dtype=x.dtype))    # (B, T, d_model)
     
     # ─────────────────────────────────────────────────────────────────────────
@@ -290,7 +229,7 @@ class ARGLayer(nn.Module):
     ) -> torch.Tensor:
         """
         Windowed GQA with window size W.
-        Uses FlashAttention-2 with window_size=(W, 0) when available.
+        Uses native PyTorch SDPA with sliding window mask.
         Returns (B, T, d_model).
         """
         B, T, _ = x.shape
@@ -313,28 +252,13 @@ class ARGLayer(nn.Module):
             K = K.repeat_interleave(n_rep, dim=1)  # (B, H, T, D)
             V = V.repeat_interleave(n_rep, dim=1)
         
-        if self.use_flash_attention and FLASH_ATTN_AVAILABLE:
-            # FlashAttention with sliding window — O(T*W) compute
-            # Rearrange to (B, T, H, D) for flash_attn
-            Q_fa = rearrange(Q, 'b h t d -> b t h d').contiguous()
-            K_fa = rearrange(K, 'b h t d -> b t h d').contiguous()
-            V_fa = rearrange(V, 'b h t d -> b t h d').contiguous()
-            
-            out = flash_attn_func(
-                Q_fa, K_fa, V_fa,
-                dropout_p=0.0,
-                causal=True,
-                window_size=(W, 0),  # local causal window
-            )  # (B, T, H, D)
-            out = rearrange(out, 'b t h d -> b t (h d)')
-        else:
-            # Fast PyTorch SDPA with sliding window mask
-            indices = torch.arange(T, device=x.device)
-            mask_2d = (indices.unsqueeze(0) <= indices.unsqueeze(1)) & \
-                      (indices.unsqueeze(0) >= (indices.unsqueeze(1) - W))
-            mask_4d = mask_2d.unsqueeze(0).unsqueeze(0)
-            attn_out = F.scaled_dot_product_attention(Q, K, V, attn_mask=mask_4d)
-            out = rearrange(attn_out, 'b h t d -> b t (h d)')
+        # Fast PyTorch SDPA with sliding window mask
+        indices = torch.arange(T, device=x.device)
+        mask_2d = (indices.unsqueeze(0) <= indices.unsqueeze(1)) & \
+                  (indices.unsqueeze(0) >= (indices.unsqueeze(1) - W))
+        mask_4d = mask_2d.unsqueeze(0).unsqueeze(0)
+        attn_out = F.scaled_dot_product_attention(Q, K, V, attn_mask=mask_4d)
+        out = rearrange(attn_out, 'b h t d -> b t (h d)')
         
         return self.local_o(out)  # (B, T, d_model)
     
