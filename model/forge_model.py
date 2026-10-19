@@ -359,7 +359,7 @@ class ForgeModel(nn.Module):
                 
                 h, aux = checkpoint(
                     _forward_layer, h,
-                    use_reentrant=True,   # standard stable checkpointing for MoE
+                    use_reentrant=False,  # required for PyTorch DDP to prevent double-marking ready
                     preserve_rng_state=True,
                 )
             else:
