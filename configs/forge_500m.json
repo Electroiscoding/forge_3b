@@ -59,6 +59,6 @@
   "use_triton_kernels":           true,
   "use_torch_compile":            true,
   "compile_mode":                 "max-autotune",
-  "use_gradient_checkpointing":   false,
-  "gradient_checkpointing_ratio": 0.0
+  "use_gradient_checkpointing":   true,
+  "gradient_checkpointing_ratio": 1.0
 }
