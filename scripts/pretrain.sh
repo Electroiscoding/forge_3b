@@ -56,6 +56,7 @@ LR_MAX="${LR_MAX:-3e-4}"
 # ── Batch sizes — tuned for 32x H100 SXM maximum NVLink throughput ─────────────
 BATCH_TOKENS="${BATCH_TOKENS:-1048576}"          # 1,048,576 tokens per global step
 PHASE1_BATCH="${PHASE1_BATCH:-1048576}"
+PHASE3_BATCH="${PHASE3_BATCH:-1048576}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 MICRO_BATCH="${MICRO_BATCH:-4}"                 # 4 seqs per GPU (prevents autograd unroll OOM)
 PHASE1_MICRO_BATCH="${PHASE1_MICRO_BATCH:-16}"
