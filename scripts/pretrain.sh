@@ -61,7 +61,7 @@ MICRO_BATCH="${MICRO_BATCH:-4}"                 # 4 seqs per GPU (prevents autog
 PHASE1_MICRO_BATCH="${PHASE1_MICRO_BATCH:-16}"
 PHASE2_MICRO_BATCH="${PHASE2_MICRO_BATCH:-4}"   # 4 seqs × 2048 = 8,192 tokens/GPU
 PHASE3_MICRO_BATCH="${PHASE3_MICRO_BATCH:-2}"
-SAVE_EVERY="${SAVE_EVERY:-1000000000}"           # checkpoint every 1B tokens
+SAVE_EVERY="${SAVE_EVERY:-500000000}"            # checkpoint every 500M tokens (~55 min on 4x B300)
 LOG_EVERY="${LOG_EVERY:-1}"                      # log EVERY step (full metric visibility)
 
 # ── Infrastructure (Auto-detects 1x, 8x, 32x GPUs) ───────────────────────────
