@@ -519,10 +519,10 @@ class ThroughputMeter:
         
         # Standard Dense BF16 Tensor Core peak TFLOPS (industry standard for MFU)
         gpu_tflops = {
+            "b300": 2500.0,  # Blackwell Ultra — BF16 dense tensor core peak (estimated)
+            "b200": 2250.0,
             "h100": 989.0,
             "h200": 989.0,
-            "b200": 2250.0,
-            "b300": 2500.0,  # Blackwell Ultra — BF16 dense tensor core peak (estimated)
             "mi300": 653.7,
             "a100": 312.0,
             "a40": 37.4,
@@ -532,10 +532,27 @@ class ThroughputMeter:
             "v100": 14.1,
         }
         
+        full_sms_map = {
+            "b300": 144,
+            "b200": 144,
+            "h100": 132,
+            "h200": 132,
+            "a100": 108,
+        }
+
         for key, tflops in gpu_tflops.items():
             if key in name:
-                logger.info(f"GPU detected: {props.name} — {tflops} TFLOPS BF16 (theoretical)")
-                return tflops
+                if "mig" in name:
+                    full_sms = full_sms_map.get(key, 144)
+                    scaled_tflops = tflops * (props.multi_processor_count / full_sms)
+                    logger.info(
+                        f"GPU detected: {props.name} (MIG {props.multi_processor_count}/{full_sms} SMs) — "
+                        f"{scaled_tflops:.1f} TFLOPS BF16 (MIG slice peak)"
+                    )
+                    return scaled_tflops
+                else:
+                    logger.info(f"GPU detected: {props.name} — {tflops} TFLOPS BF16 (theoretical)")
+                    return tflops
         
         # Estimate from SM count and clock
         sm_count = props.multi_processor_count

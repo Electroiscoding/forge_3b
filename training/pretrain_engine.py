@@ -419,7 +419,7 @@ class PretrainEngine:
                 if aux is not None:
                     step_aux += float(aux.detach()) / gradient_accumulation_steps
 
-                if (accum_step + 1) % 10 == 0 or is_last_accum:
+                if (accum_step + 1) % 4 == 0 or is_last_accum:
                     logger.info(
                         f"  [accum {accum_step+1}/{gradient_accumulation_steps}] "
                         f"micro-loss={loss.item() * gradient_accumulation_steps:.4f}"
