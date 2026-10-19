@@ -64,7 +64,7 @@ class ARGLayer(nn.Module):
         self.local_n_heads = local_n_heads
         self.local_n_kv_heads = local_n_kv_heads
         self.head_dim = head_dim
-        self.use_flash_attention = use_flash_attention and FLASH_ATTN_AVAILABLE
+        self.use_flash_attention = use_flash_attention
         self.layer_idx = layer_idx
         
         # ── Pre-norm ──────────────────────────────────────────────────────────
