@@ -16,8 +16,8 @@ import time
 import threading
 from pathlib import Path
 
-# Dual-port listening: 8888 for RunPod native proxy, 8000 for Cloudflare tunnel
-PORTS = [8888, 8000]
+# Multi-port listening: 8000 for Cloudflare tunnel / local, 8080, 8888 for proxy
+PORTS = [8000, 8080, 8888]
 
 # RunPod Metering Configuration
 POD_START_EPOCH = int(time.time())
@@ -441,9 +441,12 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
 
 def serve_on_port(port):
-    server = ThreadedHTTPServer(("0.0.0.0", port), DashboardHandler)
-    print(f"FORGE Live Dashboard listening on http://0.0.0.0:{port}")
-    server.serve_forever()
+    try:
+        server = ThreadedHTTPServer(("0.0.0.0", port), DashboardHandler)
+        print(f"FORGE Live Dashboard listening on http://0.0.0.0:{port}")
+        server.serve_forever()
+    except OSError as e:
+        print(f"Port {port} busy (skipping): {e}")
 
 def run_servers():
     threads = []
