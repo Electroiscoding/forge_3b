@@ -137,7 +137,11 @@ class PretrainEngine:
 
         try:
             # 1. Model state
-            torch.save(self.raw_model.state_dict(), str(temp_dir / "model.safetensors"))
+            try:
+                from safetensors.torch import save_file
+                save_file(self.raw_model.state_dict(), str(temp_dir / "model.safetensors"))
+            except Exception:
+                torch.save(self.raw_model.state_dict(), str(temp_dir / "pytorch_model.bin"))
             
             # 2. Optimizer & Scheduler states for exact bitwise resume
             if optimizer is not None:

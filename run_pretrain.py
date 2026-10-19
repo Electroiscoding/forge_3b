@@ -228,7 +228,14 @@ def main():
             ckpt_model_path = resume_path / "pytorch_model.bin"
 
         if ckpt_model_path.exists():
-            state_dict = torch.load(str(ckpt_model_path), map_location="cpu")
+            if str(ckpt_model_path).endswith(".safetensors"):
+                try:
+                    from safetensors.torch import load_file
+                    state_dict = load_file(str(ckpt_model_path))
+                except Exception:
+                    state_dict = torch.load(str(ckpt_model_path), map_location="cpu")
+            else:
+                state_dict = torch.load(str(ckpt_model_path), map_location="cpu")
             missing, unexpected = model.load_state_dict(state_dict, strict=False)
                 
             if missing:
