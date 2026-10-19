@@ -107,13 +107,13 @@ class PretrainEngine:
                 self.raw_model,
                 device_ids=[self.local_rank],
                 output_device=self.local_rank,
-                find_unused_parameters=False,  # deterministic MoE compute path
-                gradient_as_bucket_view=True,  # zero-copy gradient bucket view
-                bucket_cap_mb=128,             # 128MB bucket for optimal InfiniBand line rate
-                broadcast_buffers=False,       # eliminate unnecessary buffer sync across iterations
-                static_graph=True,             # pre-computes AllReduce schedule during warmup
+                find_unused_parameters=True,   # handles MoE dynamic routing and gradient checkpointing
+                gradient_as_bucket_view=False, # safe with find_unused_parameters
+                bucket_cap_mb=64,
+                broadcast_buffers=False,
+                static_graph=False,            # required for gradient checkpointing + MoE dynamic graph
             )
-            logger.info(f"🚀 Wrapped model in optimized DDP (world_size={self.world_size}, bucket_cap_mb=128, static_graph=True)")
+            logger.info(f"🚀 Wrapped model in DDP (world_size={self.world_size}, static_graph=False, find_unused_parameters=True)")
         else:
             self.model = self.raw_model
             logger.info("Single GPU — no DDP wrapping")
