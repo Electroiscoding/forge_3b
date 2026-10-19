@@ -20,7 +20,7 @@ from einops import rearrange
 from .dgn_norm import build_norm
 from .rotary_embedding import RotaryEmbedding
 from .triton_kernels import fused_swiglu
-from .pscan import pscan
+from .triton_ssm import fused_triton_ssm
 
 
 
@@ -200,21 +200,21 @@ class ARGLayer(nn.Module):
         x_dbl = self.x_proj(x_conv_t)                # (B, T, d_rank + 2*d_state)
         dt_raw, B_ssm, C_ssm = x_dbl.split([self.d_rank, self.d_state, self.d_state], dim=-1)
 
-        # dt: per-channel step size — (B, T, d_inner)
+        # dt: per-channel step size — (B, T, d_inner) → (B, d_inner, T)
         dt = F.softplus(self.dt_proj(dt_raw))
+        dt = rearrange(dt, 'b t d -> b d t').contiguous()
+
+        # B, C: (B, d_state, T)
+        B_ssm = rearrange(B_ssm, 'b t n -> b n t').contiguous()
+        C_ssm = rearrange(C_ssm, 'b t n -> b n t').contiguous()
 
         # ── Build A from complex eigenvalue params ────────────────────────────
         A = self._build_real_A()                     # (d_inner, d_state), negative real
 
-        # ── Parallel associative scan in pure PyTorch ─────────────────────────
-        dA = torch.exp(dt.unsqueeze(-1) * A.unsqueeze(0).unsqueeze(0))
-        dX = (dt * x_conv_t).unsqueeze(-1) * B_ssm.unsqueeze(2)
-
-        H = pscan(dA, dX)                            # (B, T, d_inner, d_state)
-        y = (H * C_ssm.unsqueeze(2)).sum(dim=-1)     # (B, T, d_inner)
-
-        # Skip connection D and SiLU gate z
-        y = (y + x_conv_t * self.D.unsqueeze(0).unsqueeze(0)) * F.silu(z)
+        # ── Pure Triton Fused Selective SSM Scan ──────────────────────────────
+        z_t = rearrange(z, 'b t d -> b d t').contiguous()
+        y = fused_triton_ssm(x_conv, dt, A, B_ssm, C_ssm, self.D, z_t)
+        y = rearrange(y, 'b d t -> b t d')
 
         return self.out_proj(y.to(dtype=x.dtype))    # (B, T, d_model)
     
