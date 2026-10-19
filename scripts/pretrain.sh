@@ -26,7 +26,11 @@ else
 fi
 DATA_DIR="${DATA_DIR:-$DEFAULT_DATA_DIR}"  # HF repo or local path
 OUTPUT_DIR="${OUTPUT_DIR:-/workspace/checkpoints/forge_500m_pretrain}"
-WANDB_PROJECT="${WANDB_PROJECT:-forge_500m_pretrain}"
+if [ "${NO_WANDB:-0}" = "1" ] || [ "${WANDB_MODE:-}" = "disabled" ]; then
+    WANDB_PROJECT=""
+else
+    WANDB_PROJECT="${WANDB_PROJECT:-forge_500m_pretrain}"
+fi
 WANDB_ENTITY="${WANDB_ENTITY:-}"
 # Auto-detect latest checkpoint if available to prevent any lost progress
 if [ -z "${RESUME_FROM:-}" ]; then

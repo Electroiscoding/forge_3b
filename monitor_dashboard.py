@@ -20,25 +20,35 @@ from pathlib import Path
 PORTS = [8888, 8000]
 
 # RunPod Metering Configuration
-POD_START_EPOCH = 1792080502  # Thu Oct 15 16:08:22 UTC 2026
-INITIAL_BALANCE = 462.25      # Starting USD balance reported on RunPod
-HOURLY_RATE = 11.98           # 4x H100 SXM ($2.99 x 4 = $11.96) + 200GB disk ($0.02)
-EST_RUN_HOURS = 14.0          # Estimated time for 15.0B tokens at ~300k tok/s
-EST_TOTAL_COST = round(EST_RUN_HOURS * HOURLY_RATE, 2)  # ~$167.72
+POD_START_EPOCH = int(time.time())
+INITIAL_BALANCE = 440.49      # Starting USD balance reported on RunPod
+HOURLY_RATE = 2.06           # 4x B300 MIG ($0.50 x 4 = $2.00) + 500GB volume ($0.06)
+EST_RUN_HOURS = 25.0          # Estimated time for 15.0B tokens with 4x B300 MIG
+EST_TOTAL_COST = round(EST_RUN_HOURS * HOURLY_RATE, 2)  # ~$51.50
 
 def get_gpu_stats():
-    """Extract VRAM, utilization, and temperature from nvidia-smi."""
+    """Extract VRAM and GPU telemetry, handling MIG environment cleanly."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            stats = []
+            for i in range(torch.cuda.device_count()):
+                name = torch.cuda.get_device_name(i)
+                alloc = torch.cuda.memory_allocated(i) / (1024**3)
+                total = torch.cuda.get_device_properties(i).total_memory / (1024**3)
+                stats.append(f"{i}, {name}, {alloc:.2f} GB / {total:.2f} GB, Active")
+            if stats:
+                return "\n".join(stats)
+    except Exception:
+        pass
     try:
         cmd = "nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu,temperature.gpu --format=csv,noheader"
         out = subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL, timeout=2).decode("utf-8")
-        return out.strip()
-    except Exception:
-        try:
-            cmd = "rocm-smi --showmeminfo vram --showuse"
-            out = subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL, timeout=2).decode("utf-8")
+        if "[Insufficient Permissions]" not in out and out.strip():
             return out.strip()
-        except Exception:
-            return "4x NVIDIA H100 SXM 80GB (320 GB VRAM) - Active"
+    except Exception:
+        pass
+    return "4x NVIDIA B300 SXM6 MIG 34GB (136 GB VRAM) - Active"
 
 def get_metered_cost():
     """Compute exact live metered costs, elapsed time, and balance."""
