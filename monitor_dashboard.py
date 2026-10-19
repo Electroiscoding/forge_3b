@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-FORGE-500M Live Web Dashboard with Real-Time Telemetry & RunPod Cost Metering.
+FORGE-500M Live Web Dashboard with Real-Time Telemetry, Visual Line Charts & RunPod Cost Metering.
 Runs simultaneously on:
   - Port 8888: Native RunPod HTTPS Proxy (https://<pod_id>-8888.proxy.runpod.net)
-  - Port 8000: Cloudflare Tunnel (trycloudflare.com)
-Zero external dependencies — standard Python 3.
+  - Port 8000: Cloudflare Tunnel / Local reverse proxy
+Zero external server dependencies — standard Python 3 + Client-Side High-Speed Chart.js.
 """
 import http.server
 import socketserver
@@ -23,8 +23,8 @@ PORTS = [8000, 8080, 8888]
 POD_START_EPOCH = int(time.time())
 INITIAL_BALANCE = 440.49      # Starting USD balance reported on RunPod
 HOURLY_RATE = 2.06           # 4x B300 MIG ($0.50 x 4 = $2.00) + 500GB volume ($0.06)
-EST_RUN_HOURS = 25.0          # Estimated time for 15.0B tokens with 4x B300 MIG
-EST_TOTAL_COST = round(EST_RUN_HOURS * HOURLY_RATE, 2)  # ~$51.50
+EST_RUN_HOURS = 143.0         # Estimated time for 15.0B tokens with 4x B300 MIG
+EST_TOTAL_COST = round(EST_RUN_HOURS * HOURLY_RATE, 2)  # ~$294.50
 
 def get_gpu_stats():
     """Extract VRAM and GPU telemetry, handling MIG environment cleanly."""
@@ -72,8 +72,53 @@ def get_metered_cost():
         "est_surplus_str": f"${(remaining_balance - EST_TOTAL_COST):.2f}",
     }
 
+def get_chart_data(full_text):
+    """Extract historical series for all line charts."""
+    step_re = re.compile(
+        r"\[Ph2\|Step\s+(\d+)\]\s+loss=([\d\.]+).*?lr=([\d\.e\-]+)\s+\|\s+gnorm=([\d\.]+)\s+\|\s+tok/s=([\d\,]+)\s+\|\s+MFU=([\d\.]+)%.*?mem=([\d\.]+)/"
+    )
+    micro_re = re.compile(r"\[accum\s+\d+/\d+\]\s+micro-loss=([\d\.]+)")
+
+    steps = []
+    losses = []
+    lrs = []
+    gnorms = []
+    tok_secs = []
+    mfus = []
+    mems = []
+
+    for match in step_re.finditer(full_text):
+        step, loss, lr, gnorm, tok_s, mfu, mem = match.groups()
+        steps.append(int(step))
+        losses.append(round(float(loss), 4))
+        lrs.append(float(lr))
+        gnorms.append(round(float(gnorm), 3))
+        tok_secs.append(int(tok_s.replace(",", "")))
+        mfus.append(round(float(mfu), 1))
+        mems.append(round(float(mem), 1))
+
+    micro_losses = []
+    for match in micro_re.finditer(full_text):
+        micro_losses.append(round(float(match.group(1)), 4))
+
+    # Keep last 160 micro-losses for crisp chart resolution
+    if len(micro_losses) > 160:
+        micro_losses = micro_losses[-160:]
+
+    return {
+        "steps": steps,
+        "losses": losses,
+        "lrs": lrs,
+        "gnorms": gnorms,
+        "tok_secs": tok_secs,
+        "mfus": mfus,
+        "mems": mems,
+        "micro_losses": micro_losses,
+        "micro_indices": list(range(1, len(micro_losses) + 1)),
+    }
+
 def get_training_progress():
-    """Parse the latest log lines from pretrain.log and compute telemetry."""
+    """Parse log file and extract real-time telemetry + chart series."""
     log_paths = [
         "/workspace/pretrain.log",
         "/workspace/forge_3b/pretrain.log",
@@ -81,14 +126,16 @@ def get_training_progress():
         "/root/forge_3b/training.log",
     ]
     log_content = ""
+    full_text = ""
 
     for lp in log_paths:
         p = Path(lp)
         if p.is_file():
             try:
                 with open(p, "r", errors="ignore") as f:
-                    lines = f.readlines()
-                    log_content = "".join(lines[-60:])
+                    full_text = f.read()
+                    lines = full_text.splitlines()
+                    log_content = "\n".join(lines[-60:])
                     break
             except Exception:
                 pass
@@ -107,7 +154,7 @@ def get_training_progress():
         tok_sec = "Direct Hub Stream → /workspace"
 
     # Parse pretraining step metrics if present
-    step_matches = re.findall(r"Step\s+(\d+).*?loss=([\d\.]+).*?tok/s=([\d\,]+)", log_content)
+    step_matches = re.findall(r"\[Ph2\|Step\s+(\d+)\]\s+loss=([\d\.]+).*?tok/s=([\d\,]+)", full_text)
     if step_matches:
         last_step = step_matches[-1]
         loss = f"{float(last_step[1]):.4f}"
@@ -115,8 +162,9 @@ def get_training_progress():
         curr_step = int(last_step[0])
         tokens_val = curr_step * 1_048_576
         progress_pct = min(100.0, (tokens_val / 15_000_000_000) * 100)
-        tokens = f"{tokens_val / 1e9:.2f}B / 15.0B ({progress_pct:.1f}%)"
+        tokens = f"{tokens_val / 1e9:.3f}B / 15.0B ({progress_pct:.2f}%)"
 
+    charts_data = get_chart_data(full_text)
     cost_info = get_metered_cost()
 
     return {
@@ -124,6 +172,7 @@ def get_training_progress():
         "tokens": tokens,
         "tok_sec": tok_sec,
         "progress_pct": progress_pct,
+        "charts": charts_data,
         "logs": log_content or "Initializing pretraining container...",
         "gpu": get_gpu_stats(),
         "cost": cost_info,
@@ -136,6 +185,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FORGE-500M • Autonomous Training Monitor</title>
+    <!-- High-Performance Canvas Line Charting Library -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <style>
         :root {
             --bg: #090d16;
@@ -145,6 +196,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             --accent-glow: rgba(59, 130, 246, 0.4);
             --success: #10b981;
             --warning: #f59e0b;
+            --danger: #ef4444;
+            --purple: #a855f7;
+            --cyan: #06b6d4;
             --text-main: #f9fafb;
             --text-muted: #9ca3af;
         }
@@ -154,7 +208,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             background-color: var(--bg);
             color: var(--text-main);
             padding: 24px;
-            max-width: 1400px;
+            max-width: 1440px;
             margin: 0 auto;
         }
         .header {
@@ -195,6 +249,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             letter-spacing: 0.08em;
             color: var(--text-muted);
             margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
         }
         .grid {
             display: grid;
@@ -244,6 +301,48 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             transition: width 0.4s ease;
             box-shadow: 0 0 14px var(--accent-glow);
         }
+
+        /* ── Data Visualization Charts Grid ───────────────────────────────── */
+        .charts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .chart-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 18px;
+            position: relative;
+        }
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        .chart-title {
+            font-size: 13px;
+            font-weight: 700;
+            color: #f3f4f6;
+            letter-spacing: 0.02em;
+        }
+        .chart-badge {
+            font-size: 11px;
+            font-weight: 700;
+            padding: 3px 10px;
+            border-radius: 6px;
+            background: rgba(59, 130, 246, 0.15);
+            color: #60a5fa;
+            border: 1px solid rgba(59, 130, 246, 0.3);
+        }
+        .chart-container {
+            position: relative;
+            height: 230px;
+            width: 100%;
+        }
+
         .terminal-box {
             background: #040711;
             border: 1px solid var(--border);
@@ -305,8 +404,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         </div>
         <div class="card card-cost">
             <div class="card-label">Est. 15B Total Run Cost</div>
-            <div class="card-value" id="val-est-total" style="font-size: 20px;">~$51.50</div>
-            <div class="card-sub" id="val-surplus">Surplus: +$388.99 remaining</div>
+            <div class="card-value" id="val-est-total" style="font-size: 20px;">~$294.50</div>
+            <div class="card-sub" id="val-surplus">Est. End Balance: ~$145.99</div>
         </div>
     </div>
 
@@ -320,7 +419,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <div class="card">
             <div class="card-label">Throughput / Speed</div>
             <div class="card-value" id="val-speed">--</div>
-            <div class="card-sub">Target: ~150k tok/s (4x B300 MIG)</div>
+            <div class="card-sub">Sustained: ~29,200 tok/s (4x B300)</div>
         </div>
         <div class="card">
             <div class="card-label">Model Architecture</div>
@@ -344,14 +443,59 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         </div>
     </div>
 
+    <!-- ── Live Visualization Line Charts Section ───────────────────────────── -->
+    <div class="section-title">📈 Real-Time Training Visualizations & Line Charts (Auto-Updating)</div>
+    <div class="charts-grid">
+        <div class="chart-card">
+            <div class="chart-header">
+                <span class="chart-title">📉 Global Step Training Loss</span>
+                <span class="chart-badge" id="badge-curr-loss" style="color: #38bdf8; border-color: rgba(56, 189, 248, 0.3); background: rgba(56, 189, 248, 0.1);">--</span>
+            </div>
+            <div class="chart-container"><canvas id="chart-loss"></canvas></div>
+        </div>
+        <div class="chart-card">
+            <div class="chart-header">
+                <span class="chart-title">🔬 Micro-Batch Stream Loss (High-Res)</span>
+                <span class="chart-badge" id="badge-curr-micro" style="color: #c084fc; border-color: rgba(192, 132, 252, 0.3); background: rgba(192, 132, 252, 0.1);">--</span>
+            </div>
+            <div class="chart-container"><canvas id="chart-micro-loss"></canvas></div>
+        </div>
+        <div class="chart-card">
+            <div class="chart-header">
+                <span class="chart-title">⚡ Cluster Throughput (Tokens / Sec)</span>
+                <span class="chart-badge" id="badge-curr-toks" style="color: #34d399; border-color: rgba(52, 211, 153, 0.3); background: rgba(52, 211, 153, 0.1);">--</span>
+            </div>
+            <div class="chart-container"><canvas id="chart-toks"></canvas></div>
+        </div>
+        <div class="chart-card">
+            <div class="chart-header">
+                <span class="chart-title">🎯 Hardware MFU (% Model FLOPs)</span>
+                <span class="chart-badge" id="badge-curr-mfu" style="color: #fbbf24; border-color: rgba(251, 191, 36, 0.3); background: rgba(251, 191, 36, 0.1);">--</span>
+            </div>
+            <div class="chart-container"><canvas id="chart-mfu"></canvas></div>
+        </div>
+        <div class="chart-card">
+            <div class="chart-header">
+                <span class="chart-title">📏 Gradient Norm Stability (||∇||)</span>
+                <span class="chart-badge" id="badge-curr-gnorm" style="color: #f43f5e; border-color: rgba(244, 63, 94, 0.3); background: rgba(244, 63, 94, 0.1);">--</span>
+            </div>
+            <div class="chart-container"><canvas id="chart-gnorm"></canvas></div>
+        </div>
+        <div class="chart-card">
+            <div class="chart-header">
+                <span class="chart-title">📈 Learning Rate Schedule Trajectory</span>
+                <span class="chart-badge" id="badge-curr-lr" style="color: #818cf8; border-color: rgba(129, 140, 248, 0.3); background: rgba(129, 140, 248, 0.1);">--</span>
+            </div>
+            <div class="chart-container"><canvas id="chart-lr"></canvas></div>
+        </div>
+    </div>
+
     <div class="section-title">🖥️ Live GPU Telemetry & Console Stream</div>
     <div class="terminal-box" id="terminal-logs">Connecting to live console stream...</div>
 
     <div class="footer">
         <div>
-            Primary Link: <a href="https://yx6wg0pq3d4pxt-8888.proxy.runpod.net" target="_blank">RunPod Official HTTPS Proxy</a>
-            &nbsp;•&nbsp;
-            Backup: <a id="cf-tunnel-link" href="#" target="_blank">Cloudflare Tunnel</a>
+            Permanent Link: <a href="https://yx6wg0pq3d4pxt-8888.proxy.runpod.net" target="_blank">RunPod Official HTTPS Proxy (Permanent)</a>
         </div>
         <div>
             Auto-refresh: 2s • <span id="val-updated">--</span>
@@ -359,12 +503,83 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     </div>
 
     <script>
+        // ── Chart.js Initialization ──────────────────────────────────────────
+        const charts = {};
+
+        function createChart(canvasId, label, colorHex, fillRgba) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas) return null;
+            const ctx = canvas.getContext('2d');
+            
+            return new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: label,
+                        data: [],
+                        borderColor: colorHex,
+                        backgroundColor: fillRgba || 'transparent',
+                        fill: Boolean(fillRgba),
+                        borderWidth: 2,
+                        pointRadius: 2,
+                        pointHoverRadius: 6,
+                        pointBackgroundColor: colorHex,
+                        tension: 0.25
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            backgroundColor: '#1f293d',
+                            titleColor: '#9ca3af',
+                            bodyColor: '#fff',
+                            borderColor: '#374151',
+                            borderWidth: 1,
+                            padding: 8
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: 'rgba(255, 255, 255, 0.04)' },
+                            ticks: { color: '#6b7280', maxTicksLimit: 8, font: { size: 10 } }
+                        },
+                        y: {
+                            grid: { color: 'rgba(255, 255, 255, 0.04)' },
+                            ticks: { color: '#9ca3af', font: { size: 10 } }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Initialize all 6 line charts
+        charts.loss = createChart('chart-loss', 'Global Loss', '#38bdf8', 'rgba(56, 189, 248, 0.15)');
+        charts.microLoss = createChart('chart-micro-loss', 'Micro-Loss', '#c084fc', 'rgba(192, 132, 252, 0.15)');
+        charts.toks = createChart('chart-toks', 'Tokens/s', '#34d399', 'rgba(52, 211, 153, 0.15)');
+        charts.mfu = createChart('chart-mfu', 'MFU %', '#fbbf24', 'rgba(251, 191, 36, 0.15)');
+        charts.gnorm = createChart('chart-gnorm', 'Grad Norm', '#f43f5e', 'rgba(244, 63, 94, 0.15)');
+        charts.lr = createChart('chart-lr', 'Learning Rate', '#818cf8', 'rgba(129, 140, 248, 0.15)');
+
+        function updateChartData(chart, labels, data) {
+            if (!chart || !labels || !data) return;
+            chart.data.labels = labels;
+            chart.data.datasets[0].data = data;
+            chart.update('none');
+        }
+
         async function updateDashboard() {
             try {
                 const res = await fetch('/api/stats');
                 const data = await res.json();
                 
-                // Training stats
+                // Training header stats
                 document.getElementById('val-loss').innerText = data.loss;
                 document.getElementById('val-speed').innerText = data.tok_sec;
                 document.getElementById('val-tokens').innerText = data.tokens;
@@ -381,6 +596,49 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     document.getElementById('val-surplus').innerText = 'Est. End Balance: ' + data.cost.est_surplus_str;
                 }
                 
+                // Live Line Charts Stream
+                if (data.charts) {
+                    const c = data.charts;
+                    const stepLabels = c.steps.map(s => 'Step ' + s);
+
+                    // 1. Global Step Loss
+                    updateChartData(charts.loss, stepLabels, c.losses);
+                    if (c.losses.length) {
+                        document.getElementById('badge-curr-loss').innerText = 'Loss: ' + c.losses[c.losses.length - 1].toFixed(4);
+                    }
+
+                    // 2. Micro-Batch Loss
+                    const microLabels = c.micro_indices.map(i => '#' + i);
+                    updateChartData(charts.microLoss, microLabels, c.micro_losses);
+                    if (c.micro_losses.length) {
+                        document.getElementById('badge-curr-micro').innerText = 'Latest: ' + c.micro_losses[c.micro_losses.length - 1].toFixed(4);
+                    }
+
+                    // 3. Throughput Tok/s
+                    updateChartData(charts.toks, stepLabels, c.tok_secs);
+                    if (c.tok_secs.length) {
+                        document.getElementById('badge-curr-toks').innerText = c.tok_secs[c.tok_secs.length - 1].toLocaleString() + ' tok/s';
+                    }
+
+                    // 4. MFU %
+                    updateChartData(charts.mfu, stepLabels, c.mfus);
+                    if (c.mfus.length) {
+                        document.getElementById('badge-curr-mfu').innerText = c.mfus[c.mfus.length - 1].toFixed(1) + '%';
+                    }
+
+                    // 5. Gradient Norm
+                    updateChartData(charts.gnorm, stepLabels, c.gnorms);
+                    if (c.gnorms.length) {
+                        document.getElementById('badge-curr-gnorm').innerText = 'gnorm: ' + c.gnorms[c.gnorms.length - 1].toFixed(3);
+                    }
+
+                    // 6. Learning Rate
+                    updateChartData(charts.lr, stepLabels, c.lrs);
+                    if (c.lrs.length) {
+                        document.getElementById('badge-curr-lr').innerText = 'lr: ' + c.lrs[c.lrs.length - 1].toExponential(2);
+                    }
+                }
+
                 // Console logs
                 document.getElementById('terminal-logs').innerText = data.logs;
                 document.getElementById('val-updated').innerText = data.timestamp;
@@ -388,6 +646,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 console.error("Dashboard poll failed", err);
             }
         }
+
         updateDashboard();
         setInterval(updateDashboard, 2000);
     </script>
