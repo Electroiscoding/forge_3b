@@ -277,7 +277,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <div class="header">
         <div class="title">
             <h1>🚀 FORGE-500M Autonomous Monitor</h1>
-            <p>Full 15.0B Token Pretraining • 4× NVIDIA H100 80GB SXM (320 GB VRAM)</p>
+            <p>Full 15.0B Token Pretraining • 4× NVIDIA B300 SXM6 MIG 34GB (136 GB VRAM)</p>
         </div>
         <div class="badges-wrap">
             <div class="badge">
@@ -296,17 +296,17 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <div class="card card-cost">
             <div class="card-label">RunPod Balance Remaining</div>
             <div class="card-value" id="val-balance" style="color: #34d399;">--</div>
-            <div class="card-sub" id="val-init-balance">Initial: $462.25</div>
+            <div class="card-sub" id="val-init-balance">Initial: $440.49</div>
         </div>
         <div class="card card-cost">
             <div class="card-label">Cluster Burn Rate</div>
-            <div class="card-value" id="val-rate" style="font-size: 20px;">$11.98 / hr</div>
-            <div class="card-sub">4× H100 SXM ($2.99/ea) + Storage</div>
+            <div class="card-value" id="val-rate" style="font-size: 20px;">$2.06 / hr</div>
+            <div class="card-sub">4× B300 MIG ($0.50/ea) + Storage</div>
         </div>
         <div class="card card-cost">
             <div class="card-label">Est. 15B Total Run Cost</div>
-            <div class="card-value" id="val-est-total" style="font-size: 20px;">~$167.72</div>
-            <div class="card-sub" id="val-surplus">Surplus: +$294.53 remaining</div>
+            <div class="card-value" id="val-est-total" style="font-size: 20px;">~$51.50</div>
+            <div class="card-sub" id="val-surplus">Surplus: +$388.99 remaining</div>
         </div>
     </div>
 
@@ -320,17 +320,17 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <div class="card">
             <div class="card-label">Throughput / Speed</div>
             <div class="card-value" id="val-speed">--</div>
-            <div class="card-sub">Target: ~300k tok/s (4x H100)</div>
+            <div class="card-sub">Target: ~150k tok/s (4x B300 MIG)</div>
         </div>
         <div class="card">
             <div class="card-label">Model Architecture</div>
             <div class="card-value" style="font-size: 19px;">FORGE-500M</div>
-            <div class="card-sub">499.6M params • 32 layers • 8-HSE</div>
+            <div class="card-sub">499.6M params • 18 layers • 9-HSE MoE</div>
         </div>
         <div class="card">
             <div class="card-label">Compute Acceleration</div>
-            <div class="card-value" style="font-size: 19px;">4× H100 SXM</div>
-            <div class="card-sub">320 GB VRAM • NVLink 900 GB/s</div>
+            <div class="card-value" style="font-size: 19px;">4× B300 SXM6 MIG</div>
+            <div class="card-sub">136 GB VRAM • sm_100 Architecture</div>
         </div>
     </div>
 
@@ -349,9 +349,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
     <div class="footer">
         <div>
-            Primary Link: <a href="https://ms91l6zrogbh49-8888.proxy.runpod.net" target="_blank">RunPod Official HTTPS Proxy</a>
+            Primary Link: <a href="https://yx6wg0pq3d4pxt-8888.proxy.runpod.net" target="_blank">RunPod Official HTTPS Proxy</a>
             &nbsp;•&nbsp;
-            Backup: <a href="https://shape-speakers-filled-golden.trycloudflare.com" target="_blank">Cloudflare Tunnel</a>
+            Backup: <a id="cf-tunnel-link" href="#" target="_blank">Cloudflare Tunnel</a>
         </div>
         <div>
             Auto-refresh: 2s • <span id="val-updated">--</span>
