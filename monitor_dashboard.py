@@ -20,7 +20,7 @@ from pathlib import Path
 PORTS = [8000, 8080, 8888]
 
 # RunPod Metering Configuration
-POD_START_EPOCH = int(time.time())
+POD_START_EPOCH = int(os.environ.get("POD_START_EPOCH", 1792435232))
 INITIAL_BALANCE = 440.49      # Starting USD balance reported on RunPod
 HOURLY_RATE = 2.06           # 4x B300 MIG ($0.50 x 4 = $2.00) + 500GB volume ($0.06)
 EST_RUN_HOURS = 143.0         # Estimated time for 15.0B tokens with 4x B300 MIG

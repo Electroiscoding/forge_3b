@@ -11,8 +11,8 @@ logger = logging.getLogger(__name__)
 
 def get_args():
     parser = argparse.ArgumentParser(description="Run inference on FORGE-500M using a trained model checkpoint")
-    parser.add_argument("--model_path", type=str, required=True,
-                        help="Path to the trained model directory containing config, tokenizer, and weights")
+    parser.add_argument("--model_path", type=str, default=".",
+                        help="Path to the trained model directory containing config, tokenizer, and weights (defaults to current directory)")
     parser.add_argument("--prompt", type=str, default="The future of artificial intelligence is",
                         help="Prompt to generate text from")
     parser.add_argument("--max_new_tokens", type=int, default=128,

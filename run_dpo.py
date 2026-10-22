@@ -58,11 +58,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                    choices=["dpo", "ipo", "cdpo"],
                    help="DPO variant")
     p.add_argument("--n_epochs",    type=int,   default=1)
-    p.add_argument("--batch_pairs", type=int,   default=8,
+    p.add_argument("--batch_pairs", type=int,   default=2,
                    help="Preference pairs per GPU per step")
     p.add_argument("--ga_steps",    type=int,   default=4,
                    help="Gradient accumulation steps")
     p.add_argument("--seq_len",     type=int,   default=4096)
+    p.add_argument("--max_steps",   type=int,   default=75,
+                   help="Maximum optimizer steps for DPO")
+    p.add_argument("--max_pairs",   type=int,   default=2500,
+                   help="Maximum preference pairs to load")
 
     # Optimizer
     p.add_argument("--lr",          type=float, default=5e-7)
@@ -74,7 +78,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                    choices=["standard", "lite"])
 
     # Infrastructure
-    p.add_argument("--deepspeed_config", default="./configs/ds_zero3_sft.json")
+    p.add_argument("--deepspeed_config", default=None)
     p.add_argument("--no_compile",       action="store_true")
     p.add_argument("--bf16",             action="store_true", default=True)
     p.add_argument("--no_gradient_checkpointing", action="store_true")
@@ -189,6 +193,7 @@ def main():
         bf16=args.bf16,
         torch_compile=not args.no_compile,
     )
+    dpo_config.max_steps = args.max_steps
 
     # ── Tokenizer ─────────────────────────────────────────────────────────────
     from tokenizer.crayon_wrapper import ForgeTokenizer
@@ -303,6 +308,7 @@ def main():
         dataset = PreTokenizedPreferenceDataset(
             data_dir=data_dir_resolved,
             seq_len=args.seq_len,
+            max_samples=args.max_pairs,
         )
     else:
         logger.info("Detected raw text DPO data — using PreferenceDataset (live tokenization)")
@@ -434,8 +440,11 @@ def main():
     if is_main:
         final_dir = Path(dpo_config.output_dir) / "final"
         final_dir.mkdir(parents=True, exist_ok=True)
-        bf16_sd = {k: v.to(torch.bfloat16) for k, v in policy_model.state_dict().items()}
+        raw_policy = policy_model.module if hasattr(policy_model, 'module') else policy_model
+        bf16_sd = {k: v.to(torch.bfloat16) for k, v in raw_policy.state_dict().items()}
+        torch.save(bf16_sd, str(final_dir / "pytorch_model.bin"))
         torch.save(bf16_sd, str(final_dir / "model_bf16.pt"))
+        torch.save(raw_policy.state_dict(), str(final_dir / "model.pt"))
         tokenizer.save_pretrained(str(final_dir))
         model_config.to_json(str(final_dir / "model_config.json"))
         logger.info(f"DPO complete. Final policy model: {final_dir}")

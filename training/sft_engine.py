@@ -282,6 +282,17 @@ class SFTEngine:
             if has_deepspeed:
                 logger.info("SFT: Using DeepSpeed engine for backward/step")
         
+        if not has_deepspeed and self.world_size > 1:
+            from torch.nn.parallel import DistributedDataParallel as DDP
+            self.model = DDP(
+                self.model,
+                device_ids=[self.local_rank],
+                output_device=self.local_rank,
+                find_unused_parameters=True,
+            )
+            model_engine = self.model
+            logger.info("SFT: Using PyTorch DDP for distributed training across all GPUs")
+
         model_engine.train()
         
         target_tokens = self.config.total_tokens
@@ -331,7 +342,11 @@ class SFTEngine:
                     model_engine.backward(loss)
                     model_engine.step()
                 else:
-                    loss.backward()
+                    if self.world_size > 1 and accum_step < ga_steps - 1:
+                        with model_engine.no_sync():
+                            loss.backward()
+                    else:
+                        loss.backward()
                 
                 accum_loss += loss.item() * ga_steps
             
@@ -367,22 +382,23 @@ class SFTEngine:
             if self._global_step % self.config.save_every_n_steps == 0 and self.is_main:
                 ckpt_dir = Path(self.config.output_dir) / f"sft_step{self._global_step}"
                 ckpt_dir.mkdir(parents=True, exist_ok=True)
+                raw_model = self.model.module if hasattr(self.model, 'module') else self.model
                 if has_deepspeed and hasattr(model_engine, "save_checkpoint"):
                     model_engine.save_checkpoint(str(ckpt_dir))
                 else:
-                    torch.save(self.model.state_dict(), str(ckpt_dir / "model.pt"))
+                    torch.save(raw_model.state_dict(), str(ckpt_dir / "model.pt"))
                 logger.info(f"SFT checkpoint saved: {ckpt_dir}")
-                # Upload checkpoint
-                upload_folder_async(str(ckpt_dir), repo_name="forge-500m-sft", folder_in_repo=ckpt_dir.name)
         
         # Save final
         if self.is_main:
             final_dir = Path(self.config.output_dir) / "final"
             final_dir.mkdir(parents=True, exist_ok=True)
-            torch.save(self.model.state_dict(), str(final_dir / "model.pt"))
+            raw_model = self.model.module if hasattr(self.model, 'module') else self.model
+            torch.save(raw_model.state_dict(), str(final_dir / "model.pt"))
+            bf16_state = {k: v.to(torch.bfloat16) for k, v in raw_model.state_dict().items()}
+            torch.save(bf16_state, str(final_dir / "pytorch_model.bin"))
+            torch.save(bf16_state, str(final_dir / "model_bf16.pt"))
             self.tokenizer.save_pretrained(str(final_dir))
-            # Upload final model
-            upload_folder_async(str(final_dir), repo_name="forge-500m-sft", folder_in_repo="final")
         
         elapsed_h = (time.time() - self._start_time) / 3600
         logger.info(f"SFT complete: {elapsed_h:.1f}h, ${elapsed_h*self._hourly_cost:.2f}")

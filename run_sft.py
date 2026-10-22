@@ -73,7 +73,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--tokenizer_profile", default="standard", choices=["standard", "lite"])
 
     # Infrastructure
-    p.add_argument("--deepspeed_config", default="./configs/ds_zero3_sft.json")
+    p.add_argument("--deepspeed_config", default=None)
     p.add_argument("--no_compile",       action="store_true")
     p.add_argument("--bf16",             action="store_true", default=True)
     p.add_argument("--no_gradient_checkpointing", action="store_true")
@@ -436,8 +436,11 @@ def main():
     if is_main:
         final_dir = Path(sft_config.output_dir) / "final"
         final_dir.mkdir(parents=True, exist_ok=True)
-        bf16_state = {k: v.to(torch.bfloat16) for k, v in model.state_dict().items()}
+        raw_model = model.module if hasattr(model, 'module') else model
+        bf16_state = {k: v.to(torch.bfloat16) for k, v in raw_model.state_dict().items()}
+        torch.save(bf16_state, str(final_dir / "pytorch_model.bin"))
         torch.save(bf16_state, str(final_dir / "model_bf16.pt"))
+        torch.save(raw_model.state_dict(), str(final_dir / "model.pt"))
         tokenizer.save_pretrained(str(final_dir))
         model_config.to_json(str(final_dir / "model_config.json"))
         logger.info(f"SFT complete. Final model at: {final_dir}")

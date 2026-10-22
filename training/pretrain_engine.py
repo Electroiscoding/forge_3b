@@ -80,9 +80,9 @@ class PretrainEngine:
         self._start_time = time.time()
 
         # Budget tracking (USD)
-        # Dynamic hourly cost based on RunPod Community Cloud 1x H100 SXM rate ($3.29/hr)
-        self._hourly_cost = 3.29 * world_size
-        self._budget = 400.0  # $400 hard cap for FORGE-500M full pipeline
+        # Real cluster hourly cost ($2.06/hr total for 4x B300 MIG slices)
+        self._hourly_cost = float(os.environ.get("HOURLY_COST", 2.06))
+        self._budget = float(os.environ.get("TRAINING_BUDGET", 1000.0))
 
         from training.gpu_optimizer import GPUMemoryMonitor, ThroughputMeter
         self.memory_monitor = GPUMemoryMonitor(self.device, oom_threshold_gb=8.0)

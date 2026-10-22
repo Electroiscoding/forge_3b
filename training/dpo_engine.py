@@ -47,6 +47,7 @@ class PreTokenizedPreferenceDataset(Dataset):
         self,
         data_dir: str,
         seq_len: int = 4096,
+        max_samples: Optional[int] = None,
     ):
         from data.dataset import resolve_data_dir
         import numpy as np
@@ -64,6 +65,8 @@ class PreTokenizedPreferenceDataset(Dataset):
                     line = line.strip()
                     if line:
                         self.samples.append(json.loads(line))
+                        if max_samples and len(self.samples) >= max_samples:
+                            break
         else:
             # Load from .npz shards
             npz_files = sorted(data_path.glob("**/*.npz"))
@@ -85,7 +88,11 @@ class PreTokenizedPreferenceDataset(Dataset):
                             "chosen_loss_mask": chosen_loss_mask[i].tolist() if hasattr(chosen_loss_mask[i], "tolist") else list(chosen_loss_mask[i]),
                             "rejected_loss_mask": rejected_loss_mask[i].tolist() if hasattr(rejected_loss_mask[i], "tolist") else list(rejected_loss_mask[i]),
                         })
+                        if max_samples and len(self.samples) >= max_samples:
+                            break
                     logger.info(f"  Loaded DPO shard {f.name}: {len(chosen_full_ids):,} samples")
+                    if max_samples and len(self.samples) >= max_samples:
+                        break
                 except Exception as e:
                     logger.warning(f"Failed to load DPO shard {f}: {e}")
 
@@ -280,29 +287,23 @@ def get_log_probs(
     logits: torch.Tensor,   # (B, T, vocab_size)
     labels: torch.Tensor,   # (B, T) with -100 for ignored positions
 ) -> torch.Tensor:
-    """Compute per-sequence sum of log-probabilities for non-masked tokens."""
-    # Shift for next-token prediction
-    shift_logits = logits[:, :-1, :].float().contiguous()  # (B, T-1, V)
+    """Compute per-sequence sum of log-probabilities for non-masked tokens using fused CE."""
+    shift_logits = logits[:, :-1, :].contiguous()           # (B, T-1, V)
     shift_labels = labels[:, 1:].contiguous()               # (B, T-1)
+    B, T_minus_1, V = shift_logits.shape
     
-    # Log-softmax
-    log_probs = F.log_softmax(shift_logits, dim=-1)          # (B, T-1, V)
+    # Fused PyTorch CUDA cross-entropy (0 extra memory allocation)
+    nll = F.cross_entropy(
+        shift_logits.view(-1, V).float(),
+        shift_labels.view(-1),
+        reduction="none",
+        ignore_index=-100,
+    ).view(B, T_minus_1)
     
-    # Gather log-probs at label positions
-    mask = (shift_labels != -100)                             # (B, T-1)
-    
-    # Replace -100 with 0 for gather (will be masked out)
-    safe_labels = shift_labels.masked_fill(~mask, 0)
-    
-    selected_log_probs = log_probs.gather(
-        dim=-1, index=safe_labels.unsqueeze(-1)
-    ).squeeze(-1)                                             # (B, T-1)
-    
-    # Sum over non-masked positions, normalize by sequence length
-    n_tokens = mask.float().sum(-1).clamp(min=1.0)           # (B,)
-    seq_log_probs = (selected_log_probs * mask.float()).sum(-1) / n_tokens
-    
-    return seq_log_probs   # (B,)
+    mask = (shift_labels != -100)
+    n_tokens = mask.float().sum(-1).clamp(min=1.0)
+    seq_log_probs = (-nll.sum(-1)) / n_tokens
+    return seq_log_probs
 
 
 class DPOEngine:
@@ -388,6 +389,17 @@ class DPOEngine:
             if has_deepspeed:
                 logger.info("DPO: Using DeepSpeed engine for policy backward/step")
         
+        if not has_deepspeed and self.world_size > 1:
+            from torch.nn.parallel import DistributedDataParallel as DDP
+            self.policy = DDP(
+                self.policy,
+                device_ids=[self.local_rank],
+                output_device=self.local_rank,
+                find_unused_parameters=True,
+            )
+            policy_engine = self.policy
+            logger.info("DPO: Using PyTorch DDP for policy model across all GPUs")
+
         policy_engine.train()
         
         all_rewards_chosen = []
@@ -408,18 +420,16 @@ class DPOEngine:
                 rejected_input = batch["rejected_input_ids"].to(self.device, non_blocking=True)
                 rejected_labels = batch["rejected_labels"].to(self.device, non_blocking=True)
                 
-                if not has_deepspeed:
+                if not has_deepspeed and (accum_step == 0):
                     optimizer.zero_grad(set_to_none=True)
                 
                 # ── Policy forward passes ──────────────────────────────────
                 with bf16_autocast(enabled=self.config.bf16):
                     # Process chosen + rejected in one batch for efficiency
                     combined_input = torch.cat([chosen_input, rejected_input], dim=0)
-                    combined_labels = torch.cat([chosen_labels, rejected_labels], dim=0)
                     
                     policy_outputs = policy_engine(
                         input_ids=combined_input,
-                        labels=combined_labels,
                         return_aux_loss=False,
                     )
                     
@@ -456,7 +466,11 @@ class DPOEngine:
                     policy_engine.backward(loss)
                     policy_engine.step()
                 else:
-                    loss.backward()
+                    if self.world_size > 1 and accum_step < self.config.gradient_accumulation_steps - 1:
+                        with policy_engine.no_sync():
+                            loss.backward()
+                    else:
+                        loss.backward()
                 
                 if not has_deepspeed and (self._global_step + 1) % self.config.gradient_accumulation_steps == 0:
                     grad_norm = clip_grad_norm_and_log(
@@ -505,22 +519,33 @@ class DPOEngine:
                 if self._global_step % self.config.save_every_n_steps == 0 and self.is_main:
                     ckpt_dir = Path(self.config.output_dir) / f"dpo_step{self._global_step}"
                     ckpt_dir.mkdir(parents=True, exist_ok=True)
+                    raw_policy = self.policy.module if hasattr(self.policy, 'module') else self.policy
                     if has_deepspeed and hasattr(policy_engine, "save_checkpoint"):
                         policy_engine.save_checkpoint(str(ckpt_dir))
                     else:
-                        torch.save(self.policy.state_dict(), str(ckpt_dir / "model.pt"))
+                        torch.save(raw_policy.state_dict(), str(ckpt_dir / "model.pt"))
                     logger.info(f"DPO checkpoint saved: {ckpt_dir}")
-                    # Upload checkpoint
-                    upload_folder_async(str(ckpt_dir), repo_name="forge-500m-dpo", folder_in_repo=ckpt_dir.name)
+                
+                max_steps = getattr(self.config, 'max_steps', None)
+                if max_steps and (self._global_step // self.config.gradient_accumulation_steps) >= max_steps:
+                    if self.is_main:
+                        logger.info(f"DPO target steps reached ({max_steps}). Finishing DPO training.")
+                    break
+            
+            max_steps = getattr(self.config, 'max_steps', None)
+            if max_steps and (self._global_step // self.config.gradient_accumulation_steps) >= max_steps:
+                break
         
         # Save final
         if self.is_main:
             final_dir = Path(self.config.output_dir) / "final"
             final_dir.mkdir(parents=True, exist_ok=True)
-            torch.save(self.policy.state_dict(), str(final_dir / "model.pt"))
+            raw_policy = self.policy.module if hasattr(self.policy, 'module') else self.policy
+            torch.save(raw_policy.state_dict(), str(final_dir / "model.pt"))
+            bf16_sd = {k: v.to(torch.bfloat16) for k, v in raw_policy.state_dict().items()}
+            torch.save(bf16_sd, str(final_dir / "pytorch_model.bin"))
+            torch.save(bf16_sd, str(final_dir / "model_bf16.pt"))
             self.tokenizer.save_pretrained(str(final_dir))
-            # Upload final model
-            upload_folder_async(str(final_dir), repo_name="forge-500m-dpo", folder_in_repo="final")
         
         elapsed_h = (time.time() - self._start_time) / 3600
         final_acc = sum(all_accuracies) / max(1, len(all_accuracies))

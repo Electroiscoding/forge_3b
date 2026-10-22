@@ -388,7 +388,7 @@ class ForgeModel(nn.Module):
             
             # Chunked LM head projection to prevent allocating massive (B, T, 206464) FP32 tensor in VRAM
             shift_h_flat = shift_h.reshape(-1, shift_h.shape[-1])
-            chunk_size = 4096
+            chunk_size = 1024
             n_tokens = shift_h_flat.shape[0]
             total_ce_loss = 0.0
             valid_tokens = 0
