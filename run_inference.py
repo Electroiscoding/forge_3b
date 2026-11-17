@@ -48,11 +48,11 @@ def main():
         
     # 2. Load Model Config
     from config import ForgeModelConfig
-    config_path = model_dir / "model_config.json"
+    config_path = model_dir / "config.json"
     if not config_path.exists():
-        config_path = model_dir / "config.json"
+        config_path = model_dir / "model_config.json"
     if not config_path.exists():
-        raise FileNotFoundError(f"Could not find model_config.json or config.json in {model_dir}")
+        raise FileNotFoundError(f"Could not find config.json or model_config.json in {model_dir}")
         
     logger.info(f"Loading config from {config_path}")
     model_config = ForgeModelConfig.from_json(str(config_path))
@@ -65,23 +65,31 @@ def main():
     
     # 4. Load Model Weights
     loaded_weights = False
-    for weight_filename in ("model_bf16.pt", "model.pt", "pytorch_model.bin"):
-        weight_path = model_dir / weight_filename
-        if weight_path.exists():
-            logger.info(f"Loading model weights from {weight_path}...")
-            state_dict = torch.load(str(weight_path), map_location="cpu")
-            # Convert values to bfloat16
-            state_dict = {k: v.to(torch.bfloat16) for k, v in state_dict.items()}
-            model.load_state_dict(state_dict, strict=False)
-            del state_dict
-            torch.cuda.empty_cache()
-            loaded_weights = True
-            break
+    safetensors_path = model_dir / "model.safetensors"
+    if safetensors_path.exists():
+        import safetensors.torch
+        logger.info(f"Loading model weights from safetensors: {safetensors_path}...")
+        state_dict = safetensors.torch.load_file(str(safetensors_path))
+        state_dict = {k: v.to(torch.bfloat16) for k, v in state_dict.items()}
+        model.load_state_dict(state_dict, strict=False)
+        del state_dict
+        loaded_weights = True
+    else:
+        for weight_filename in ("model_bf16.pt", "model.pt", "pytorch_model.bin"):
+            weight_path = model_dir / weight_filename
+            if weight_path.exists():
+                logger.info(f"Loading model weights from {weight_path}...")
+                state_dict = torch.load(str(weight_path), map_location="cpu")
+                state_dict = {k: v.to(torch.bfloat16) for k, v in state_dict.items()}
+                model.load_state_dict(state_dict, strict=False)
+                del state_dict
+                loaded_weights = True
+                break
             
     if not loaded_weights:
         raise FileNotFoundError(
             f"No model weights found in {model_dir}. "
-            "Expected one of: model_bf16.pt, model.pt, pytorch_model.bin"
+            "Expected one of: model.safetensors, model_bf16.pt, model.pt, pytorch_model.bin"
         )
         
     model = model.to(device).to(torch.bfloat16)
