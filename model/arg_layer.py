@@ -257,7 +257,14 @@ class ARGLayer(nn.Module):
         mask_2d = (indices.unsqueeze(0) <= indices.unsqueeze(1)) & \
                   (indices.unsqueeze(0) >= (indices.unsqueeze(1) - W))
         mask_4d = mask_2d.unsqueeze(0).unsqueeze(0)
-        attn_out = F.scaled_dot_product_attention(Q, K, V, attn_mask=mask_4d)
+        try:
+            attn_out = F.scaled_dot_product_attention(Q, K, V, attn_mask=mask_4d)
+        except RuntimeError:
+            scale = 1.0 / math.sqrt(self.head_dim)
+            scores = torch.matmul(Q, K.transpose(-2, -1)) * scale
+            scores = scores.masked_fill(~mask_4d, float("-inf"))
+            attn_weights = F.softmax(scores, dim=-1)
+            attn_out = torch.matmul(attn_weights, V)
         out = rearrange(attn_out, 'b h t d -> b t (h d)')
         
         return self.local_o(out)  # (B, T, d_model)

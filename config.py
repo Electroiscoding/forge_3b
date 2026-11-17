@@ -28,7 +28,7 @@ if torch.cuda.is_available():
     try:
         torch.backends.cuda.enable_flash_sdp(True)     # Flash SDP in PyTorch 2.x
         torch.backends.cuda.enable_mem_efficient_sdp(True)
-        torch.backends.cuda.enable_math_sdp(False)     # disable slow math SDP
+        torch.backends.cuda.enable_math_sdp(True)      # Allow math SDP as fallback for T4/V100/Colab
     except Exception:
         pass
 

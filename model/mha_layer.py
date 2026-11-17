@@ -155,14 +155,25 @@ class GlobalMHALayer(nn.Module):
             )  # (B, T, H, D)
             out = rearrange(out, 'b t h d -> b t (h d)')
         else:
-            # Standard PyTorch SDPA (fused, memory efficient)
-            out = F.scaled_dot_product_attention(
-                Q, K, V,
-                attn_mask=attention_mask,
-                dropout_p=self.dropout if self.training else 0.0,
-                is_causal=(attention_mask is None),
-                scale=self.scale,
-            )  # (B, H, T, D)
+            # Standard PyTorch SDPA (fused, memory efficient) with math fallback
+            try:
+                out = F.scaled_dot_product_attention(
+                    Q, K, V,
+                    attn_mask=attention_mask,
+                    dropout_p=self.dropout if self.training else 0.0,
+                    is_causal=(attention_mask is None),
+                    scale=self.scale,
+                )  # (B, H, T, D)
+            except RuntimeError:
+                scores = torch.matmul(Q, K.transpose(-2, -1)) * self.scale
+                if attention_mask is not None:
+                    scores = scores + attention_mask
+                else:
+                    T_q, T_k = Q.shape[2], K.shape[2]
+                    causal_mask = torch.ones(T_q, T_k, device=Q.device, dtype=torch.bool).tril(diagonal=T_k - T_q)
+                    scores = scores.masked_fill(~causal_mask, float("-inf"))
+                attn_weights = F.softmax(scores, dim=-1)
+                out = torch.matmul(attn_weights, V)
             out = rearrange(out, 'b h t d -> b t (h d)')
         
         out = self.o_proj(out)  # (B, T, d_model)
