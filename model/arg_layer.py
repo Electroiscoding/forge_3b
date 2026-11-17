@@ -192,7 +192,19 @@ class ARGLayer(nn.Module):
 
         # ── Causal conv for local mixing ──────────────────────────────────────
         x_conv = rearrange(x_inner, 'b t d -> b d t')
-        x_conv = self.conv1d(x_conv)[:, :, :T]       # trim causal padding, still (B, d_inner, T)
+        try:
+            x_conv = self.conv1d(x_conv)[:, :, :T]       # trim causal padding, still (B, d_inner, T)
+        except RuntimeError:
+            orig_dtype = x_conv.dtype
+            w = self.conv1d.weight.to(torch.float32)
+            b = self.conv1d.bias.to(torch.float32) if self.conv1d.bias is not None else None
+            x_conv = F.conv1d(
+                x_conv.to(torch.float32), w, b,
+                stride=self.conv1d.stride,
+                padding=self.conv1d.padding,
+                dilation=self.conv1d.dilation,
+                groups=self.conv1d.groups
+            )[:, :, :T].to(orig_dtype)
         x_conv = F.silu(x_conv)                      # (B, d_inner, T)
         x_conv_t = rearrange(x_conv, 'b d t -> b t d')
 

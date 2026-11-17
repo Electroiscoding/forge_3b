@@ -24,7 +24,7 @@ import torch
 if torch.cuda.is_available():
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
-    torch.backends.cudnn.benchmark = True          # auto-tune cuDNN kernels
+    torch.backends.cudnn.benchmark = False         # disable cuDNN benchmark to avoid engine search failures on T4/V100
     try:
         torch.backends.cuda.enable_flash_sdp(True)     # Flash SDP in PyTorch 2.x
         torch.backends.cuda.enable_mem_efficient_sdp(True)
