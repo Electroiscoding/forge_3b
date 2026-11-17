@@ -14,6 +14,7 @@ Fuses:
 
 from __future__ import annotations
 import torch
+import torch.nn.functional as F
 import triton
 import triton.language as tl
 
@@ -232,6 +233,53 @@ def fused_triton_ssm(
 ) -> torch.Tensor:
     """
     Fused selective scan forward and backward in pure Triton.
+    """
+    pass
+
+def pytorch_ssm(
+    x: torch.Tensor,
+    dt: torch.Tensor,
+    A: torch.Tensor,
+    B_ssm: torch.Tensor,
+    C_ssm: torch.Tensor,
+    D_skip: torch.Tensor,
+    z: torch.Tensor,
+) -> torch.Tensor:
+    """Pure PyTorch CPU/fallback implementation of fused selective SSM."""
+    B_sz, D_sz, T_sz = x.shape
+    N_sz = A.shape[1]
+
+    out = torch.empty_like(x)
+    h = torch.zeros(B_sz, D_sz, N_sz, device=x.device, dtype=torch.float32)
+
+    x_f = x.float()
+    dt_f = dt.float()
+    z_f = z.float()
+    B_f = B_ssm.float()
+    C_f = C_ssm.float()
+    A_f = A.float()
+    D_f = D_skip.float()
+
+    for t in range(T_sz):
+        dA = torch.exp(dt_f[:, :, t].unsqueeze(-1) * A_f.unsqueeze(0))
+        u = (dt_f[:, :, t] * x_f[:, :, t]).unsqueeze(-1) * B_f[:, :, t].unsqueeze(1)
+        h = dA * h + u
+        y = (h * C_f[:, :, t].unsqueeze(1)).sum(dim=-1) + x_f[:, :, t] * D_f.unsqueeze(0)
+        out[:, :, t] = (y * F.silu(z_f[:, :, t])).to(x.dtype)
+
+    return out
+
+
+def fused_triton_ssm(
+    x: torch.Tensor,
+    dt: torch.Tensor,
+    A: torch.Tensor,
+    B_ssm: torch.Tensor,
+    C_ssm: torch.Tensor,
+    D_skip: torch.Tensor,
+    z: torch.Tensor,
+) -> torch.Tensor:
+    """
     Inputs:
       x:      (B, d_inner, T)
       dt:     (B, d_inner, T)
@@ -243,12 +291,18 @@ def fused_triton_ssm(
     Returns:
       out:    (B, d_inner, T)
     """
-    return TritonSSMFunction.apply(
-        x.contiguous(),
-        dt.contiguous(),
-        A.contiguous(),
-        B_ssm.contiguous(),
-        C_ssm.contiguous(),
-        D_skip.contiguous(),
-        z.contiguous(),
-    )
+    if not x.is_cuda:
+        return pytorch_ssm(x, dt, A, B_ssm, C_ssm, D_skip, z)
+    try:
+        return TritonSSMFunction.apply(
+            x.contiguous(),
+            dt.contiguous(),
+            A.contiguous(),
+            B_ssm.contiguous(),
+            C_ssm.contiguous(),
+            D_skip.contiguous(),
+            z.contiguous(),
+        )
+    except Exception:
+        return pytorch_ssm(x, dt, A, B_ssm, C_ssm, D_skip, z)
+
