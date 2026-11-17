@@ -296,6 +296,14 @@ class ForgeModel(nn.Module):
     
     def set_input_embeddings(self, value: nn.Embedding):
         self.embed_tokens = value
+
+    @property
+    def device(self) -> torch.device:
+        return next(self.parameters()).device
+
+    @property
+    def dtype(self) -> torch.dtype:
+        return next(self.parameters()).dtype
     
     def enable_gradient_checkpointing(self):
         self.gradient_checkpointing_enabled = True
